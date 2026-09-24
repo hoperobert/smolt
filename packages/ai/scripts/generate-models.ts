@@ -1195,14 +1195,19 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 
 /**
  * Plan models upstream stopped listing, kept so existing users keep them.
- * DOMAIN: the key this model is billed against in models.dev's public
- * catalogue, used for its reference cost. There is no way to tell a plan
- * listing that vanished upstream from one that never existed, so the set is
- * explicit and hand-maintained: delete an entry once the plan is gone.
+ * DOMAIN: the model id as the listings that still describe it name it. The
+ * entry is read from the public API catalogue when it has one, else from the
+ * other regional plan listing. There is no way to tell a plan listing that
+ * vanished upstream from one that never existed, so the set is explicit and
+ * hand-maintained: delete an entry once the plan is gone.
  */
 const ZAI_RETAINED_MODELS: Record<string, Record<string, string>> = {
 	"zai-coding-cn": {
+		"glm-4.7": "glm-4.7",
+		"glm-5-turbo": "glm-5-turbo",
 		"glm-5.1": "glm-5.1",
+		"glm-5.2": "glm-5.2",
+		"glm-5.2-highspeed": "glm-5.2-highspeed",
 		"glm-5v-turbo": "glm-5v-turbo",
 	},
 };
@@ -1227,7 +1232,10 @@ function processZaiModels(data: ModelsDevCatalog): Model<Api>[] {
 			([modelId, model]) => [modelId, model as ModelsDevModel] as const,
 		);
 		for (const [modelId, retainedFrom] of Object.entries(ZAI_RETAINED_MODELS[provider] ?? {})) {
-			const reference = data.zai?.models[retainedFrom] as ModelsDevModel | undefined;
+			const reference =
+				(data.zai?.models[retainedFrom] as ModelsDevModel | undefined) ??
+				(data["zai-coding-plan"]?.models[retainedFrom] as ModelsDevModel | undefined) ??
+				(data["zhipuai-coding-plan"]?.models[retainedFrom] as ModelsDevModel | undefined);
 			if (reference === undefined) continue;
 			if (listed.some(([id]) => id === modelId)) continue;
 			listed.push([modelId, reference]);
