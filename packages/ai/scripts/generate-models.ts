@@ -1193,6 +1193,20 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 	}
 }
 
+/**
+ * Plan models upstream stopped listing, kept so existing users keep them.
+ * DOMAIN: the key this model is billed against in models.dev's public
+ * catalogue, used for its reference cost. There is no way to tell a plan
+ * listing that vanished upstream from one that never existed, so the set is
+ * explicit and hand-maintained: delete an entry once the plan is gone.
+ */
+const ZAI_RETAINED_MODELS: Record<string, Record<string, string>> = {
+	"zai-coding-cn": {
+		"glm-5.1": "glm-5.1",
+		"glm-5v-turbo": "glm-5v-turbo",
+	},
+};
+
 function processZaiModels(data: ModelsDevCatalog): Model<Api>[] {
 	const variants = [
 		{
@@ -1209,13 +1223,25 @@ function processZaiModels(data: ModelsDevCatalog): Model<Api>[] {
 	const models: Model<Api>[] = [];
 
 	for (const { source, provider, baseUrl } of variants) {
-		for (const [modelId, model] of Object.entries(data[source]?.models ?? {})) {
-			const m = model as ModelsDevModel;
+		const listed = Object.entries(data[source]?.models ?? {}).map(
+			([modelId, model]) => [modelId, model as ModelsDevModel] as const,
+		);
+		for (const [modelId, retainedFrom] of Object.entries(ZAI_RETAINED_MODELS[provider] ?? {})) {
+			const reference = data.zai?.models[retainedFrom] as ModelsDevModel | undefined;
+			if (reference === undefined) continue;
+			if (listed.some(([id]) => id === modelId)) continue;
+			listed.push([modelId, reference]);
+		}
+		for (const [modelId, m] of listed) {
 			if (m.tool_call !== true) continue;
 			const supportsImage = m.modalities?.input?.includes("image");
 
 			const thinkingLevelMap = getEffortThinkingLevelMap(m.reasoning_options ?? []);
-			const isGlm52 = modelId === "glm-5.2" || modelId === "glm-5.2-highspeed";
+			// z.ai takes `off` for the 5.2 generation, whose effort values do not
+			// include a "none"; 5.3 and later accept "none" directly, so upstream's
+			// own off value is left as models.dev reports it.
+			const isGlm52 =
+				modelId === "glm-5.2" || modelId === "glm-5.2-highspeed" || modelId.startsWith("glm-5.2-");
 			if (thinkingLevelMap && isGlm52) {
 				thinkingLevelMap.off = "none";
 			}
@@ -1814,6 +1840,49 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 
 		models.push(...processZaiModels(data));
 
+		// Process the public z.ai API. models.dev keeps its plan listing
+		// (zai-coding-plan) and its API listing (zai) in step, but the API is
+		// the billing surface users authenticate against, so it is built from
+		// both: a plan model missing here would leave nothing to fall back on.
+		{
+			const baseUrl = "https://api.z.ai/api/paas/v4";
+			const listed = Object.entries(data.zai?.models ?? {}).map(
+				([modelId, model]) => [modelId, model as ModelsDevModel] as const,
+			);
+			const listedIds = new Set(listed.map(([modelId]) => modelId));
+			for (const [modelId, model] of Object.entries(data["zai-coding-plan"]?.models ?? {})) {
+				if (listedIds.has(modelId)) continue;
+				listed.push([modelId, model as ModelsDevModel]);
+			}
+
+			for (const [modelId, m] of listed) {
+				if (m.tool_call !== true) continue;
+				const thinkingLevelMap = getEffortThinkingLevelMap(m.reasoning_options ?? []);
+				if (thinkingLevelMap && (modelId === "glm-5.2" || modelId === "glm-5.2-highspeed")) {
+					thinkingLevelMap.off = "none";
+				}
+				models.push({
+					id: modelId,
+					name: m.name || modelId,
+					api: "openai-completions",
+					provider: "zai",
+					baseUrl,
+					reasoning: m.reasoning === true,
+					...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					cost: {
+						input: m.cost?.input || 0,
+						output: m.cost?.output || 0,
+						cacheRead: m.cost?.cache_read || 0,
+						cacheWrite: m.cost?.cache_write || 0,
+					},
+					contextWindow: m.limit?.context || 4096,
+					maxTokens: m.limit?.output || 4096,
+				});
+				recordModelsDevReasoningOptions("zai", modelId, m);
+			}
+		}
+
 		// Process Mistral models
 		if (data.mistral?.models) {
 			for (const [modelId, model] of Object.entries(data.mistral.models)) {
@@ -2140,9 +2209,13 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
-		// Process Kimi For Coding models
-		if (data["kimi-for-coding"]?.models) {
-			const kimiModels = data["kimi-for-coding"].models as Record<string, ModelsDevModel>;
+		// Process Kimi For Coding models. models.dev renamed the provider key:
+		// 'kimi-for-coding' became 'kimi-code-plan-global' (api.kimi.ai) and
+		// 'kimi-code-plan-cn' (api.kimi.com). The OAuth flow authenticates against
+		// auth.kimi.com, so the .com plan is the one that matches this provider.
+		const kimiSource = data["kimi-code-plan-cn"] ?? data["kimi-for-coding"];
+		if (kimiSource?.models) {
+			const kimiModels = kimiSource.models as Record<string, ModelsDevModel>;
 			const hasCanonicalModel = Object.prototype.hasOwnProperty.call(kimiModels, "kimi-for-coding");
 
 			const kimiAliases = new Set(["k2p5", "k2p6", "k2p7"]);
@@ -2460,6 +2533,20 @@ async function generateModels() {
 			(candidate.provider === "vercel-ai-gateway" && candidate.id === "moonshotai/kimi-k3")
 		) {
 			candidate.maxTokens = KIMI_K3_MAX_TOKENS;
+		}
+		// Llama 4 Scout's listing reports 1.28M context, but no endpoint it routes
+		// to serves more than DeepInfra's 327680, so an overflow test sized to the
+		// listing sends far past what any endpoint accepts. Maverick's listing has
+		// the same problem, and its endpoint accepts 198720 input tokens against a
+		// 128000 window without reporting anything, so the build records the window
+		// its endpoints actually enforce.
+		const OPENROUTER_ENDPOINT_CONTEXT_WINDOWS: Record<string, number> = {
+			"meta-llama/llama-4-scout": 327680,
+			"meta-llama/llama-4-maverick": 128000,
+		};
+		if (candidate.provider === "openrouter") {
+			const endpointWindow = OPENROUTER_ENDPOINT_CONTEXT_WINDOWS[candidate.id];
+			if (endpointWindow !== undefined) candidate.contextWindow = endpointWindow;
 		}
 		// Keep selected OpenRouter model metadata stable until upstream settles.
 		if (candidate.provider === "openrouter" && candidate.id === "moonshotai/kimi-k2.5") {

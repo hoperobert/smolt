@@ -119,7 +119,12 @@ function generateImageModelsFile(models: ImagesModel<"openrouter-images">[]): st
 			baseUrl: ${JSON.stringify(model.baseUrl)},
 			input: ${JSON.stringify(model.input)},
 			output: ${JSON.stringify(model.output)},
-			cost: ${JSON.stringify(model.cost, null, 2).replace(/^/gm, "\t")}
+			cost: {
+				input: ${model.cost.input},
+				output: ${model.cost.output},
+				cacheRead: ${model.cost.cacheRead},
+				cacheWrite: ${model.cost.cacheWrite},
+			},
 		} satisfies ImagesModel<${JSON.stringify(model.api)}>`,
 				]),
 		),
