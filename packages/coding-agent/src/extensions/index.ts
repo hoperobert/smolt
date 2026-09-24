@@ -111,7 +111,8 @@ export const builtInExtensions: InlineExtension[] = [
 		name: "research",
 		factory: researchExtension,
 		hidden: true,
-		description: "A team of investigators works a subject and stops at nothing short of the answer",
+		description:
+			"A team of investigators, or the session itself, works a subject and stops at nothing short of the answer",
 	},
 	{
 		name: "review",

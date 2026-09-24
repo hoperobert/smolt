@@ -264,13 +264,32 @@ describe("/research command", () => {
 		expect(kickoff).toContain("write_report");
 	});
 
-	test("a bare subject hands team selection to the supervisor", async () => {
-		await command("how stripe.com renders its pricing table");
+	test("a bare subject is researched in this session and spawns nothing", async () => {
+		const ctx = await command("how stripe.com renders its pricing table");
 		expect(spawned.length).toBe(0);
-		expect(smolt.sentMessages[0]).toContain("Plan a research team");
-		expect(smolt.sentMessages[0]).toContain("how stripe.com renders its pricing table");
-		expect(smolt.sentMessages[0]).toContain("network-sleuth");
-		expect(smolt.sentMessages[0]).toContain("angles array");
+		expect(handle.activeRun()).toBeDefined();
+		const brief = smolt.sentMessages[0]!;
+		expect(brief).toContain("Research this yourself");
+		expect(brief).toContain("how stripe.com renders its pricing table");
+		expect(brief).toContain("no background researchers");
+		expect(brief).toContain("write_report");
+		expect(String(ctx.status)).toContain("research: solo");
+		// The session gets the researcher's own ladder, so it can climb it itself.
+		expect([...smolt.tools.keys()].sort()).toEqual(["browse", "fetch", "research", "search"]);
+		const fetched = await smolt.tools.get("fetch")!.execute("c1", { url: "https://example.dev/pricing" });
+		expect(fetched.content[0]!.text).toContain("Starter is $9");
+		// The run is real: findings land on it with no team to attribute them to.
+		const filed = await runTool({
+			action: "add_finding",
+			title: "Prices ride on a JSON call",
+			what: "The table is filled client-side",
+			topic: "pricing",
+			sources: ["https://example.dev/pricing"],
+		});
+		expect(filed.success).toBe(true);
+		const report = await runTool({ action: "write_report", content: "## Answer\n\n$9" }, ctx);
+		expect(report.success).toBe(true);
+		expect(ctx.status).toBeUndefined();
 	});
 
 	test("an empty invocation asks for a subject and refuses a second concurrent run", async () => {

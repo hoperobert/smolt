@@ -124,7 +124,7 @@ Smolt ships these extensions itself. Each one can be switched off by listing its
 | `wayfinder` | Maps work too big for one session into decision tickets |
 | `subagents` | Background agent threads that keep their own context |
 | `battletest` | Simulated users run the app and file what they find as tickets |
-| `research` | A team of investigators works a subject and stops at nothing short of the answer |
+| `research` | A team of investigators, or the session itself, works a subject and stops at nothing short of the answer |
 | `review` | Reads the pending diff, or any target you name, for defects |
 | `pool` | Several credentials per provider, with failover when one hits a limit |
 | `telegram` | Two-way bridge between this session and your own Telegram bot |

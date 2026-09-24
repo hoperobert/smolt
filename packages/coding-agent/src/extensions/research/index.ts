@@ -51,16 +51,19 @@ import { DEFAULT_MAX_CHARS, type FetchAs, type FetchImpl, fetchPage, webSearch }
  * Research: a team of investigators goes after a subject and stops at
  * nothing short of the answer.
  *
- * `/research <subject>` deals a team — a source diver, an observer, a
- * network sleuth, a historian, whoever the deck turns up — and spawns each
- * as its own background agent session on the same foundation as battletest:
- * a private browser, a diary, a shared record, a supervisor watching the
- * roster. Where a tester files tickets, a researcher files findings, each
- * with a confidence and its sources; and the team works a question map —
+ * `/research <subject>` spawns nothing: the run is created with an empty
+ * roster and this session investigates it itself, with the researcher's own
+ * ladder registered on first use. State a count or a model and the deck is
+ * dealt instead — a source diver, an observer, a network sleuth, a
+ * historian, whoever turns up — each spawned as its own background agent
+ * session on the same foundation as battletest: a private browser, a diary,
+ * a shared record, a supervisor watching the roster. Either way a run ends
+ * the same way. Where a tester files tickets, a researcher files findings,
+ * each with a confidence and its sources; and the run works a question map —
  * the sharp sub-questions the subject decomposes into, with blocking edges,
  * claims, and a computed frontier — the part of wayfinder worth keeping.
  *
- * Every researcher climbs the same ladder: fetch the raw page and its
+ * Every investigator climbs the same ladder: fetch the raw page and its
  * source; browse it headless and read what the page renders, requests, and
  * runs; relaunch a visible browser when a site refuses the headless one;
  * pull repositories, packages, bundles, source maps and archives from the
@@ -96,6 +99,10 @@ const MAX_WAIT_SECONDS = 600;
 
 /** Base for per-researcher debugging ports, offset by index; clear of battletest's range. */
 const DEBUG_PORT_BASE = 9433;
+/** The port the parent session's own browser takes when it investigates a solo run. */
+const SOLO_DEBUG_PORT = 9480;
+/** Who files a solo run's findings: the session itself, never a spawned researcher. */
+const SOLO_AUTHOR = "solo";
 
 /** Waves beyond this on one run mean the subject is not converging; the supervisor reports instead. */
 /**
@@ -423,16 +430,26 @@ Reading what a site serves any visitor, in a real browser if it insists on one, 
 When your angle is spent: file remaining findings, answer or release your claims, one final 'note' (topic 'overall') with your closing view, then finish. Your final reply is read by another agent: three to five sentences — the answer to the subject as you now see it and how confident you are, how many findings you filed and questions you answered, and the biggest thing still open.`;
 }
 
-/** `/research` with no count: the supervising agent picks the team first. */
-function teamPlanPrompt(subject: string, modelRef?: string): string {
-	return `Plan a research team, then start the run.
+/**
+ * `/research <subject>` with no team stated: the session itself investigates.
+ * The run, its findings, its question map and its report are the ones a team
+ * would have produced — only the investigator is the session you are already
+ * in, so nothing is spawned and nothing runs on a second context.
+ */
+function soloResearchPrompt(slug: string, subject: string): string {
+	return `Research this yourself, in this session. Run '${slug}' has no background researchers and none should be spawned: you are the investigator.
 
-The subject: ${subject}
+THE SUBJECT
+${subject}
 
-1. Scout for a minute — what kind of question is this? A site or product whose mechanism is wanted (then the answer is in its pages, source, and traffic), a technology or practice (docs, repos, discussions), a market or comparison (many sources, cross-checked), or something in this repository (read it first). If the subject names a URL, open it once yourself with the fetch tool to see what you are dealing with. A look, not a study.
-2. Pick the team from the angle deck. Default to a single researcher on the best-aimed angle — one focused researcher answers most subjects, and every extra one multiplies the wave's spend. Add a second or third only when the subject has genuinely distinct halves that one angle cannot cover. Each pick is an angle chosen for THIS subject: ${ANGLE_NAMES.join(", ")}. Match angles to the kind of question — a site or product's mechanism wants an observer (uses it and watches), a network-sleuth (reads its traffic) and a source-diver (reads its code); a technology or practice wants a documentarian, a source-diver and an experimenter; a market or comparison wants a documentarian, a community-listener and a comparator; a "how did it get this way" wants a historian. Add a verifier whenever the answer will rest on claims that need checking against each other. Narrow an angle to the subject with a focus after a colon: 'network-sleuth: the checkout flow'. One well-aimed researcher is enough for a narrow question; three when the subject has distinct halves. Past runs' form is in form.jsonl at the root of the research store if it exists — weigh which angles have actually found things before.
-3. Optionally seed the question map: pass 'questions' — up to 6 sharp sub-questions whose answers would settle the subject — so the team starts on the frontier instead of decomposing from scratch. Only questions you can state precisely now; the team adds the rest.
-4. Start the run: research action 'start' with your angles array, subject: '${subject.replace(/'/g, "\\'")}'${modelRef ? `, model: '${modelRef}'` : ""}. ${modelRef ? "" : "Do NOT pass a model — researchers run on the session's own model unless the user names one. "}The kickoff brief for supervising the run arrives as a follow-up message.`;
+1. DECOMPOSE FIRST: put the sharp sub-questions whose answers would settle the subject on the map with the research tool (action 'add_question', run '${slug}'), and anything you can sense but not yet phrase into update_run 'add_fog'. Read the subject closely: a site or product whose mechanism is wanted lives in its pages, source and traffic; a technology or practice in its docs, repos and discussions; a market or comparison across many sources; something in this repository in the repository itself.
+2. CLIMB THE LADDER: 'search' finds where things live (vary the query: exact phrases, site:github.com, 'api', 'changelog'); 'fetch' reads a page the way a crawler sees it ('text', 'html', 'scripts' then fetch those bundles to read the code, 'json', 'links', 'headers'); 'browse' drives your own headless Chrome when a page needs JavaScript to render, and its 'network' action lists the requests the page made — that is how the API behind a UI is reconstructed. When a site refuses the headless browser, 'relaunch' with headed: true and carry on. Drop to the shell when it is quicker: curl with browser headers, git clone a public repository, unpacks, source maps, web.archive.org. Reading what a site serves any visitor is research; never log in, create accounts, pay, enter personal data, solve or bypass a bot check or paywall, reach a real person, or do anything destructive or disruptive — such a wall is a dead-end finding and the ladder goes around it.
+3. RECORD AS YOU GO, not at the end: file each distinct thing learned with action 'add_finding' (title, what, confidence, kind, topic, evidence quoted, sources as URLs, researcher '${SOLO_AUTHOR}', run '${slug}') — a claim without a source is an opinion; answer a question with 'answer' once it is settled; close one no legitimate route reaches with update_question status 'dead-end' plus what you tried; note a wall you could not get around as a finding of kind 'dead-end' so it is not retried.
+4. STOP AT THE ANSWER: when the questions are settled, or every remaining route is on record, write the report (action 'write_report', run '${slug}'): ## Answer first, then the substance by theme with every claim carrying its source as a markdown link, the contradictions, the dead ends, and what stays open.
+
+Then tell me here in chat: the answer first in plain language, the key evidence as markdown links, what is still open, and where the report lives. I must be able to judge the answer from your message alone.
+
+KEEP IT LEAN: your context is the budget, and every page you keep is re-read on every later turn. Read the part you need, file what it taught you, and let the finding carry the detail rather than the transcript. If the subject genuinely needs more than one investigator, say so in your reply instead of spawning anything — a team is something I ask for ('/research 3 researchers into ${subject}').`;
 }
 
 /** Shared tail of the kickoff and settle prompts: how to synthesize a finished wave. */
@@ -1222,6 +1239,8 @@ export function createResearchExtension(
 	const clearanceTimeoutMs = paths.clearanceTimeoutMs ?? DEFAULT_CLEARANCE_TIMEOUT_MS;
 	let researchers: ResearcherSlot[] = [];
 	let activeRun: string | undefined;
+	/** The run this session is investigating itself, with no spawned team. */
+	let soloRun: string | undefined;
 	let synthesisDue = false;
 	interface PendingClearance extends ClearanceRequest {
 		id: string;
@@ -1385,7 +1404,8 @@ export function createResearchExtension(
 	};
 
 	const paintUnchecked = (ctx: ExtensionContext): void => {
-		if (activeRun === undefined || researchers.length === 0) {
+		const solo = soloRun !== undefined && soloRun === activeRun;
+		if (activeRun === undefined || (researchers.length === 0 && !solo)) {
 			ctx.ui.setStatus("research", undefined);
 			ctx.ui.setWidget("research", undefined);
 			return;
@@ -1412,10 +1432,16 @@ export function createResearchExtension(
 		const questions = `${map.answered}/${map.answered + map.open} questions`;
 		ctx.ui.setStatus(
 			"research",
-			live > 0
-				? `research: ${live}/${researchers.length} researching, ${findings.length} findings, ${questions}${pending}${spentLabel}`
-				: `research: done, ${findings.length} findings, ${questions}${spentLabel}`,
+			solo
+				? `research: solo, ${findings.length} findings, ${questions}`
+				: live > 0
+					? `research: ${live}/${researchers.length} researching, ${findings.length} findings, ${questions}${pending}${spentLabel}`
+					: `research: done, ${findings.length} findings, ${questions}${spentLabel}`,
 		);
+		if (researchers.length === 0) {
+			ctx.ui.setWidget("research", undefined);
+			return;
+		}
 		const filedBy = new Map<string, ResearchFinding[]>();
 		for (const finding of findings) {
 			const list = filedBy.get(finding.researcher) ?? [];
@@ -1473,10 +1499,54 @@ export function createResearchExtension(
 			slot.status = "stopped";
 		}
 		for (const slot of researchers) slot.driver?.dispose();
-		for (const slot of browsers.values()) slot.driver?.dispose();
+		for (const slot of browsers.values()) {
+			slot.driver?.dispose();
+			// A later run reuses this slot; a disposed driver must not be handed back.
+			slot.driver = undefined;
+		}
 		browsers.clear();
-		if (mark && activeRun !== undefined && live.length > 0) store.setRunStatus(activeRun, "stopped");
+		const wasSolo = soloRun !== undefined && soloRun === activeRun;
+		if (mark && activeRun !== undefined && (live.length > 0 || wasSolo)) store.setRunStatus(activeRun, "stopped");
+		soloRun = undefined;
 		return live.length;
+	};
+
+	let soloToolsReady = false;
+	/**
+	 * A solo run investigates with the same ladder a researcher climbs, so the
+	 * session needs fetch, search and browse itself. Registered on first use:
+	 * a session that never runs research pays nothing for them.
+	 */
+	const ensureSoloTools = (runSlug: string): void => {
+		if (soloToolsReady) return;
+		soloToolsReady = true;
+		const slot: BrowserSlot = {};
+		browsers.set(SOLO_AUTHOR, slot);
+		smolt.registerTool(
+			makeBrowseTool({
+				slot,
+				port: SOLO_DEBUG_PORT,
+				profileDir: store.profileDir(runSlug, SOLO_AUTHOR),
+				factory: browseFactory,
+			}),
+		);
+		smolt.registerTool(makeFetchTool(fetchImpl));
+		smolt.registerTool(makeSearchTool(fetchImpl));
+	};
+
+	/**
+	 * `/research <subject>` with no team stated: a run with no researchers, worked
+	 * by this session. The findings, the question map and the report are the same
+	 * as a team's; nothing is spawned unless the user asks for a team.
+	 */
+	const startSoloRun = (subject: string, ctx: ExtensionContext): ResearchRun => {
+		const run = store.createRun({ subject, researchers: [] });
+		activeRun = run.slug;
+		soloRun = run.slug;
+		ensureSoloTools(run.slug);
+		paint(ctx);
+		smolt.sendUserMessage(soloResearchPrompt(run.slug, subject));
+		return run;
 	};
 
 	const startRun = async (
@@ -1492,6 +1562,7 @@ export function createResearchExtension(
 		const team = picks !== undefined ? generateResearchTeam(picks) : generateResearchers(count);
 		for (const researcher of team) researcher.wave = 1;
 		const run = store.createRun({ subject, researchers: team, notes });
+		soloRun = undefined;
 		for (const question of questions ?? []) {
 			if (question.trim() !== "")
 				store.addQuestion(run.slug, { title: question.trim(), question: question.trim(), askedBy: "user" });
@@ -1541,6 +1612,7 @@ export function createResearchExtension(
 		store.updateRun(run.slug, { researchers: [...run.researchers, ...team], wave });
 		store.setRunStatus(run.slug, "researching");
 		activeRun = run.slug;
+		soloRun = undefined;
 		const updated = store.readRun(run.slug) ?? run;
 		await dispatchResearchers(updated, undefined, ctx, model, thinkingLevel);
 		smolt.sendUserMessage(
@@ -1565,7 +1637,9 @@ export function createResearchExtension(
 		if (!run) return `Unknown run '${ref}'. Runs: ${store.listRunSlugs().join(", ") || "(none)"}`;
 		if (run.status === "complete") return `Run '${run.slug}' is already complete; nothing to resume.`;
 		const team = run.researchers.filter((researcher) => (researcher.wave ?? 1) === run.wave);
-		if (team.length === 0) return `Run '${run.slug}' has no recorded researchers; it cannot be resumed.`;
+		if (team.length === 0) {
+			return `Run '${run.slug}' was investigated in the session itself and has no researchers to re-spawn; keep going on it by hand, or dispatch a wave with 'continue'.`;
+		}
 		if (running().length > 0) {
 			return `This session already has ${running().length} researcher(s) running; 'stop' first, then resume.`;
 		}
@@ -1676,6 +1750,7 @@ export function createResearchExtension(
 	smolt.on("session_start", async (_event, ctx) => {
 		researchers = [];
 		activeRun = undefined;
+		soloRun = undefined;
 		synthesisDue = false;
 		paint(ctx);
 	});
@@ -1751,8 +1826,10 @@ export function createResearchExtension(
 			"(question, blocked_by?, text?, status open|dead-end|out-of-scope, reason?); 'answer' (question, " +
 			"answer, gist?); 'update_run' (notes?, add_fog?, remove_fog?); 'write_report' (content, run?) " +
 			"completes the run.\n\n" +
-			"WHEN: after /research dispatches a run (wait, then synthesize or continue), or when the user asks " +
-			"about earlier research or wants a subject taken further.",
+			"WHEN: after /research hands a subject to this session (do the work yourself: search, fetch, browse, " +
+			"file findings and answers as you go, then 'write_report'), after /research or the tool dispatched a " +
+			"team (wait, then synthesize or continue), or when the user asks about earlier research or wants a " +
+			"subject taken further.",
 		parameters: Type.Object({
 			action: Type.Union(
 				[
@@ -1971,6 +2048,11 @@ export function createResearchExtension(
 			}
 
 			if (params.action === "wait") {
+				if (soloRun !== undefined) {
+					return textResult(
+						`Run '${soloRun}' is being investigated in this session — there is no background team to wait on. Search, fetch and browse it yourself, file findings and answers as you go, and finish with 'write_report'.`,
+					);
+				}
 				const diskStatus = activeRun === undefined ? undefined : store.readRun(activeRun)?.status;
 				if (researchers.length === 0 || (diskStatus !== undefined && diskStatus !== "researching")) {
 					const interrupted = store
@@ -2115,15 +2197,22 @@ export function createResearchExtension(
 					usage,
 				};
 			}
-			return textResult(JSON.stringify(researchTool(store, params)));
+			const result = researchTool(store, params);
+			// A solo run is over when its report is written; the marker clears with it.
+			if (params.action === "write_report" && soloRun !== undefined) {
+				soloRun = undefined;
+				paint(ctx);
+			}
+			return textResult(JSON.stringify(result));
 		},
 	});
 
 	smolt.registerCommand("research", {
 		description:
-			"Send a team of investigators after a subject and stop at nothing short of the answer, in plain " +
-			"language: e.g. /research how stripe.com renders its pricing table, or /research 3 researchers using " +
-			"opencode minimax-m3 into X. /research resume [slug] continues an interrupted run; /research continue dispatches the next wave",
+			"Research a subject and stop at nothing short of the answer, in plain language: /research <subject> " +
+			"investigates it in this session; state a count or a model — /research 3 researchers using " +
+			"opencode minimax-m3 into X — to dispatch background researchers instead. /research resume [slug] " +
+			"continues an interrupted run; /research continue dispatches the next wave",
 		getArgumentCompletions: (argumentPrefix) => {
 			const items = [
 				{ value: "status", label: "status", description: "How the current run is going" },
@@ -2142,17 +2231,22 @@ export function createResearchExtension(
 			const verb = first.toLowerCase();
 
 			if (verb === "status") {
-				if (researchers.length === 0) {
+				if (activeRun === undefined) {
 					ctx.ui.notify("No research run in this session. Start one with /research <subject>.", "info");
 					return;
 				}
-				const findings =
-					activeRun === undefined
-						? 0
-						: store.listFindings(activeRun).filter((f) => f.status !== "duplicate").length;
-				const map = activeRun === undefined ? undefined : store.questionMap(activeRun);
+				const findings = store.listFindings(activeRun).filter((f) => f.status !== "duplicate").length;
+				const map = store.questionMap(activeRun);
+				if (researchers.length === 0) {
+					ctx.ui.notify(
+						`Run ${activeRun} (no team: this session is investigating it) — ${findings} findings, ` +
+							`${map.answered} answered / ${map.open} open questions.`,
+						"info",
+					);
+					return;
+				}
 				ctx.ui.notify(
-					`Run ${activeRun}: ${running().length}/${researchers.length} still researching, ${findings} findings${map ? `, ${map.answered} answered / ${map.open} open questions` : ""}.\n` +
+					`Run ${activeRun}: ${running().length}/${researchers.length} still researching, ${findings} findings, ${map.answered} answered / ${map.open} open questions.\n` +
 						researchers
 							.map((slot) => `${slot.researcher.name} (${slot.researcher.angle}): ${slot.status}`)
 							.join("\n"),
@@ -2259,17 +2353,19 @@ export function createResearchExtension(
 				ctx.ui.notify("What should the team research? /research <subject>.", "error");
 				return;
 			}
-			if (parsed.count === undefined) {
-				smolt.sendUserMessage(
-					teamPlanPrompt(subject, parsed.model ? `${parsed.model.provider}/${parsed.model.id}` : undefined),
-				);
+			// No count and no model: the session investigates the subject itself.
+			// A team is something the user asks for, by counting researchers or
+			// naming the model they run on.
+			if (parsed.count === undefined && parsed.model === undefined) {
+				startSoloRun(subject, ctx);
 				return;
 			}
-			if (parsed.count < 1 || parsed.count > MAX_RESEARCHERS) {
+			const count = parsed.count ?? DEFAULT_RESEARCHERS;
+			if (count < 1 || count > MAX_RESEARCHERS) {
 				ctx.ui.notify(`Researcher count must be between 1 and ${MAX_RESEARCHERS}.`, "error");
 				return;
 			}
-			await startRun(parsed.count, subject, ctx, parsed.model, parsed.thinkingLevel);
+			await startRun(count, subject, ctx, parsed.model, parsed.thinkingLevel);
 		},
 	});
 

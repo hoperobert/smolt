@@ -71,7 +71,7 @@ Built-in extensions register these commands as well:
 | `/wayfinder` | Chart or work a wayfinder map: plan big work as decision tickets |
 | `/subagents` | Inspect, steer and stop background agent threads |
 | `/battletest` | Send simulated users through the app, described in plain language |
-| `/research` | Send a team of investigators after a subject and report back |
+| `/research` | Investigate a subject: `/research <subject>` does it in this session, a count or a model dispatches background researchers |
 | `/review` | Review code changes: pending work, or a named PR, branch, range, or path. `/review autofix` fixes what a review finds, in a hidden chat (off by default) |
 | `/cues` | Notes that arrive when their subject does; lists them and which are armed |
 | `/auto-thinking` | Auto thinking mode: classify thinking per task (`on`, `off`, `status`) |
