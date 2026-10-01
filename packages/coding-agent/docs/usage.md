@@ -78,6 +78,7 @@ Built-in extensions register these commands as well:
 | `/pool` | Credential pools: failover keys per provider |
 | `/telegram` | Link Telegram: the agent can message you, and your replies reach the session |
 | `/webserver` | Serve the desktop app in a browser, and show the link |
+| `/vos` | Your Vos teammates: roster and unread (`/vos`), `chat <name> [message]`, `routines [name]`, `skills`, `rules`, `groups`, `connect`. Reads the key from `VOS_API_KEY` (and `VOS_URL`), or an `apiKey` you put in `~/.smolt/vos.json` |
 | `/sites` | Build a site here and host it on imagined.so: describe the site to build, or `login`, `new`, `link`, `preview`, `publish`, `database`, `supabase`, `resend`, `stripe` (each with `switch`, `disconnect`) |
 
 ## Message Queue

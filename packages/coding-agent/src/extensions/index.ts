@@ -19,6 +19,7 @@ import sitesExtension from "./sites/index.ts";
 import subagentsExtension from "./subagents/index.ts";
 import telegramExtension from "./telegram/index.ts";
 import toolsExtension from "./tools/index.ts";
+import vosExtension from "./vos/index.ts";
 import wayfinderExtension from "./wayfinder/index.ts";
 import webserverExtension from "./webserver/index.ts";
 
@@ -149,6 +150,12 @@ export const builtInExtensions: InlineExtension[] = [
 		factory: webserverExtension,
 		hidden: true,
 		description: "Serves the desktop app in a browser, switched on and off with /webserver",
+	},
+	{
+		name: "vos",
+		factory: vosExtension,
+		hidden: true,
+		description: "Your Vos teammates from the terminal: roster, chat, routines, skills, rules, groups",
 	},
 	{
 		name: "sites",

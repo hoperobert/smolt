@@ -130,6 +130,7 @@ Smolt ships these extensions itself. Each one can be switched off by listing its
 | `telegram` | Two-way bridge between this session and your own Telegram bot |
 | `cues` | House notes that enter the prompt only when their subject comes up |
 | `webserver` | Serves the desktop app in a browser, switched on and off with `/webserver` |
+| `vos` | Your Vos teammates from the terminal: roster, chat, routines, skills, rules, groups |
 | `sites` | Builds a site here and hosts it on imagined.so, with Supabase as its backend |
 
 ## Extension Locations
