@@ -144,15 +144,18 @@ function rosterLine(d: RosterDot): string {
 
 function messageLine(m: Message, threadName: string): string {
 	const who = m.role === "you" ? "You" : (m.fromVos?.name ?? threadName);
-	const extra = m.choices?.length ? `  [${m.choices.join(" / ")}]` : "";
+	// Choices under an approval are the approval's; once it is answered they are noise.
+	const extra = m.choices?.length && m.attachment?.type !== "approval" ? `  [${m.choices.join(" / ")}]` : "";
 	const attachment =
 		m.attachment?.type === "secret"
 			? "  (asks for a secret: answer it in the Vos app or smolt desktop)"
-			: m.attachment?.type === "image"
-				? "  (image)"
-				: m.attachment?.type === "link"
-					? `  (${m.attachment.title}: ${m.attachment.url})`
-					: "";
+			: m.attachment?.type === "approval"
+				? "  (an approval: answer it in the Vos app or smolt desktop)"
+				: m.attachment?.type === "image"
+					? "  (image)"
+					: m.attachment?.type === "link"
+						? `  (${m.attachment.title}: ${m.attachment.url})`
+						: "";
 	return `**${who}:** ${m.text}${extra}${attachment}`;
 }
 
@@ -334,7 +337,6 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 					say(
 						[
 							`## ${threadName}`,
-							"",
 							...(recent.length ? recent.map((m) => messageLine(m, threadName)) : ["No messages yet."]),
 						].join("\n\n"),
 					);
@@ -365,7 +367,10 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				for (const r of routines) {
 					const state = r.enabled ? "on" : r.pausedReason ? `paused: ${r.pausedReason}` : "off";
 					const last = r.runs[0] ? ` · last ${r.runs[0].status} ${ago(r.runs[0].at)}` : "";
-					const next = r.enabled && r.nextRun ? ` · next ${new Date(r.nextRun).toLocaleString()}` : "";
+					const next =
+						r.enabled && r.nextRun
+							? ` · next ${new Date(r.nextRun).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`
+							: "";
 					lines.push(`- **${r.name}** (${state}): ${describeTrigger(r.trigger)}${next}${last}`);
 				}
 				say(lines.join("\n"));
