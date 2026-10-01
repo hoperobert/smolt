@@ -232,6 +232,12 @@ const secrets = new Map([
 	["sec-1", { id: "sec-1", vos: "main", label: "GitHub token", why: "To deploy the staging site", site: "github.com", computerId: "pc-main", into: "env", env: "GITHUB_TOKEN", state: "pending", createdAt: minutesAgo(3), expiresAt: new Date(Date.now() + 12 * 60_000).toISOString() }],
 ]);
 const shares = new Map();
+/** Pairings by id, and the device keys approvals minted (key -> record). */
+const pairs = new Map();
+const deviceKeys = new Map();
+const authorised = (header) => header === `Bearer ${KEY}` || deviceKeys.has(String(header ?? "").replace(/^Bearer\s+/i, ""));
+const pairView = (p) => ({ id: p.id, name: p.name, kind: p.kind, createdAt: p.createdAt, expiresAt: p.expiresAt, state: pairState(p) });
+const pairState = (p) => (p.state === "pending" && Date.parse(p.expiresAt) < Date.now() ? "expired" : p.state);
 const teaches = new Map();
 
 // ---------------------------------------------------------------- events
@@ -360,8 +366,31 @@ const server = http.createServer(async (req, res) => {
 		if (!share) return json(res, 404, { error: "No such share" });
 		return json(res, 200, share.snapshot);
 	}
+	// Pairing: public, outside /v1. The QR carries the code; the poll gets the device key once.
+	if (path === "/pair" && req.method === "POST") {
+		const b = await readBody(req);
+		const id = `pr_${uuid()}`;
+		const code = randomUUID().replace(/-/g, "") + uuid();
+		const short = String(Math.floor(100000 + Math.random() * 900000));
+		const pair = { id, code, short, name: String(b.name ?? "smolt"), kind: String(b.kind ?? "smolt-desktop"), state: "pending", createdAt: now(), expiresAt: new Date(Date.now() + (Number(process.env.MOCK_PAIR_SECONDS) || 300) * 1000).toISOString() };
+		pairs.set(id, pair);
+		console.log(`pair ${id} (${pair.name}): approve with  curl -X POST -H "Authorization: Bearer ${KEY}" -H "Content-Type: application/json" -d '{"c":"${code}"}' ${BASE}/v1/pair/${id}/approve`);
+		return json(res, 201, { id, code, short, expiresAt: pair.expiresAt, url: `vos://pair?s=${encodeURIComponent(BASE)}&id=${id}&c=${code}` });
+	}
+	if (path.startsWith("/pair/") && req.method === "GET") {
+		const pair = pairs.get(path.slice(6));
+		if (!pair || url.searchParams.get("c") !== pair.code) return json(res, 404, { error: "No such pairing" });
+		const state = pairState(pair);
+		if (state === "approved" && pair.key) {
+			const key = pair.key;
+			pairs.delete(pair.id);
+			return json(res, 200, { state, key, server: BASE });
+		}
+		return json(res, 200, { state });
+	}
 	if (!path.startsWith("/v1/")) return json(res, 404, { error: "Not found" });
-	if (req.headers.authorization !== `Bearer ${KEY}`) return json(res, 401, { error: "Missing or wrong API key." });
+	if (!authorised(req.headers.authorization)) return json(res, 401, { error: "Missing or wrong API key." });
+	const isMasterKey = req.headers.authorization === `Bearer ${KEY}`;
 	const threadId = (req.headers["x-vos-dot"] ?? url.searchParams.get("dot") ?? "main").toString();
 	const vosId = threadId.startsWith("group:") ? (groups.get(threadId.slice(6))?.members[0] ?? "main") : threadId;
 	const p = path.slice(3);
@@ -684,6 +713,43 @@ const server = http.createServer(async (req, res) => {
 		}
 	}
 
+	// pairing (the phone's side) and device keys
+	if (p === "/pair/claim" && method === "POST") {
+		const pair = [...pairs.values()].find((x) => x.short === String(body.short) && pairState(x) === "pending");
+		return pair ? json(res, 200, { ...pairView(pair), c: pair.code }) : json(res, 404, { error: "No pending pairing with that code" });
+	}
+	if (seg[0] === "pair" && seg[1]) {
+		const pair = pairs.get(seg[1]);
+		const c = body.c ?? url.searchParams.get("c");
+		if (!pair || c !== pair.code) return json(res, 404, { error: "No such pairing" });
+		if (!seg[2] && method === "GET") return json(res, 200, pairView(pair));
+		if (pairState(pair) !== "pending") return json(res, 409, { error: `Already ${pairState(pair)}` });
+		if (seg[2] === "approve" && method === "POST") {
+			const key = `vosd_${randomUUID().replace(/-/g, "")}`;
+			deviceKeys.set(key, { id: `key_${uuid()}`, name: pair.name, kind: pair.kind, createdAt: now() });
+			pair.state = "approved";
+			pair.key = key;
+			res.writeHead(204);
+			return res.end();
+		}
+		if (seg[2] === "deny" && method === "POST") {
+			pair.state = "denied";
+			res.writeHead(204);
+			return res.end();
+		}
+	}
+	if (seg[0] === "keys") {
+		if (!isMasterKey) return json(res, 403, { error: "Device keys can't manage device keys." });
+		if (!seg[1] && method === "GET") return json(res, 200, [...deviceKeys.values()]);
+		if (seg[1] && method === "DELETE") {
+			const entry = [...deviceKeys.entries()].find(([, v]) => v.id === seg[1]);
+			if (!entry) return json(res, 404, { error: "No such key" });
+			deviceKeys.delete(entry[0]);
+			res.writeHead(204);
+			return res.end();
+		}
+	}
+
 	// computers
 	if (p === "/screens") {
 		const tick = Math.floor(Date.now() / 1000);
@@ -708,7 +774,7 @@ function wsFrame(payload, opcode) {
 
 server.on("upgrade", (req, socket) => {
 	const url = new URL(req.url ?? "/", BASE);
-	if (url.pathname !== "/v1/computer/live" || req.headers.authorization !== `Bearer ${KEY}`) {
+	if (url.pathname !== "/v1/computer/live" || !authorised(req.headers.authorization)) {
 		socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
 		return;
 	}

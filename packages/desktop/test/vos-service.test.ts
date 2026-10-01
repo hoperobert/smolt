@@ -230,4 +230,66 @@ describe("VosService", () => {
 		service.liveClose("ada");
 		expect(service.liveInput("ada", { kind: "tap" })).toMatchObject({ ok: false });
 	});
+
+	test("pairing: the page gets the QR text, the main process gets the key and keeps it encrypted", async () => {
+		const pair = {
+			id: "pr_1",
+			code: "secret-code-secret-code-secret-code",
+			short: "123456",
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			url: "vos://pair?s=https%3A%2F%2Fvos.test&id=pr_1&c=secret-code-secret-code-secret-code",
+		};
+		const polls = [{ state: "pending" }, { state: "approved", key: "vosd_devicekey" }];
+		const seen: Seen[] = [];
+		const { service, sent } = make({
+			pollMs: 5,
+			host: "DESK",
+			fetch: fakeFetch(seen, (url) =>
+				url.pathname === "/pair"
+					? new Response(JSON.stringify(pair), { status: 201 })
+					: new Response(JSON.stringify(polls.shift() ?? { state: "pending" })),
+			),
+		});
+		const started = await service.pairStart("https://vos.test");
+		expect(started).toEqual({
+			ok: true,
+			value: { id: "pr_1", qr: pair.url, short: "123456", expiresAt: pair.expiresAt, name: "smolt on DESK" },
+		});
+		expect(JSON.parse(seen[0]?.body ?? "{}")).toEqual({ name: "smolt on DESK", kind: "smolt-desktop" });
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		expect(sent).toContainEqual({ channel: "vos:pair", payload: { id: "pr_1", state: "approved" } });
+		expect(JSON.stringify(sent)).not.toContain("vosd_devicekey");
+		expect(service.status()).toMatchObject({ connected: true, keySource: "encrypted", deviceName: "smolt on DESK" });
+		const file = readFileSync(path, "utf-8");
+		expect(file).not.toContain("vosd_devicekey");
+		expect(JSON.parse(file)).toMatchObject({ url: "https://vos.test", desktopDeviceName: "smolt on DESK" });
+		// Disconnecting forgets the key and the paired name.
+		expect(service.disconnect()).toMatchObject({ connected: false });
+		expect(JSON.parse(readFileSync(path, "utf-8"))).toEqual({ url: "https://vos.test" });
+	});
+
+	test("pairing that is declined or cancelled keeps nothing", async () => {
+		const pair = {
+			id: "pr_2",
+			code: "c".repeat(32),
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			url: "vos://x",
+		};
+		const { service, sent } = make({
+			pollMs: 5,
+			fetch: fakeFetch([], (url) =>
+				url.pathname === "/pair"
+					? new Response(JSON.stringify(pair))
+					: new Response(JSON.stringify({ state: "denied" })),
+			),
+		});
+		await service.pairStart("https://vos.test");
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		expect(sent).toContainEqual({ channel: "vos:pair", payload: { id: "pr_2", state: "denied" } });
+		expect(service.status().connected).toBe(false);
+		await service.pairStart("https://vos.test");
+		service.pairCancel();
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(sent.filter((s) => s.channel === "vos:pair").length).toBe(1);
+	});
 });

@@ -29,6 +29,7 @@ import {
 } from "../state/app.ts";
 import { AUTO_THINKING_ENTRY, thinkingLabel } from "../thinking.ts";
 import { useApp } from "../state/useApp.ts";
+import { disconnectVos, openVos, useVos } from "../state/vos.ts";
 import { Button } from "./ui/button.tsx";
 import { Tip } from "./ui/tooltip.tsx";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog.tsx";
@@ -219,6 +220,56 @@ function matches(query: string, haystack: string): boolean {
  * The app in a browser. The switch starts and stops the server in the main
  * process; the hint says where to open it, or why it could not start.
  */
+/**
+ * Vos, from Settings: who this app is connected as, and the way out.
+ * Disconnecting only forgets the key here; a paired key is revoked from the
+ * phone, which is what the confirmation says.
+ */
+function VosSection() {
+	const v = useVos();
+	const connection = v.connection;
+	const hint = !connection?.connected
+		? "Not connected. Pair with your iPhone to chat with your vos here."
+		: connection.deviceName
+			? `Connected as ${connection.deviceName} · ${connection.url.replace(/^https?:\/\//, "")}`
+			: `Connected with ${connection.keySource === "env" ? "VOS_API_KEY" : "an API key"} · ${connection.url.replace(/^https?:\/\//, "")}`;
+	return (
+		<Row label="Vos" hint={hint}>
+			{connection?.connected ? (
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={async () => {
+						const ok = await requestConfirm({
+							title: "Disconnect Vos?",
+							message: connection.deviceName
+								? "smolt forgets this device's key. To revoke the key itself, open the Vos app: Settings › Connected devices."
+								: "smolt forgets the API key. Your vos and their work stay on the server.",
+							actionLabel: "Disconnect",
+							destructive: true,
+						});
+						if (ok) await disconnectVos();
+					}}
+				>
+					Disconnect
+				</Button>
+			) : (
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => {
+						app.settingsOpen = false;
+						bump();
+						openVos();
+					}}
+				>
+					Connect
+				</Button>
+			)}
+		</Row>
+	);
+}
+
 function WebServerSection() {
 	const [web, setWeb] = useState<WebServerState | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -608,6 +659,7 @@ export function SettingsDialog() {
 										/>
 									</Row>
 								)}
+								{matches(query, "vos teammates phone pair paired connected device") && <VosSection />}
 								{matches(query, "web server browser phone tailscale remote") && <WebServerSection />}
 								{matches(query, "worktree isolation git branch") && <WorktreeSection />}
 								{matches(query, "compact export html session") && (

@@ -81,7 +81,9 @@ function SectionMenu() {
 				</DropdownMenuItem>
 				<DropdownMenuItem onSelect={() => openVos(undefined, "profile")}>Add a vos from a link…</DropdownMenuItem>
 				<DropdownMenuSeparator />
-				<div className="px-2.5 py-1 text-[11.5px] text-faint">
+				<div className="px-2.5 py-1 text-[11.5px] leading-snug text-faint">
+					{v.connection?.deviceName ? `Connected as ${v.connection.deviceName}` : "Connected with an API key"}
+					<br />
 					{v.connection?.url.replace(/^https?:\/\//, "")}
 					{v.connection?.keySource === "session" ? " · key kept for this session" : ""}
 				</div>
@@ -90,7 +92,9 @@ function SectionMenu() {
 					onSelect={async () => {
 						const ok = await requestConfirm({
 							title: "Disconnect Vos?",
-							message: "smolt forgets the API key. Your vos and their work stay on the server.",
+							message: v.connection?.deviceName
+								? "smolt forgets this device's key. To revoke the key itself, open the Vos app: Settings › Connected devices."
+								: "smolt forgets the API key. Your vos and their work stay on the server.",
 							actionLabel: "Disconnect",
 							destructive: true,
 						});

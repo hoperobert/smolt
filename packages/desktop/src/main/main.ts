@@ -919,6 +919,8 @@ app.whenReady().then(async () => {
 	ipcMain.handle("vos:status", () => vos.status());
 	ipcMain.handle("vos:connect", (_e, url: unknown, key: unknown) => vos.connect(String(url ?? ""), String(key ?? "")));
 	ipcMain.handle("vos:disconnect", () => vos.disconnect());
+	ipcMain.handle("vos:pair-start", (_e, url: unknown) => vos.pairStart(String(url ?? "")));
+	ipcMain.handle("vos:pair-cancel", () => vos.pairCancel());
 	ipcMain.handle("vos:call", (_e, method: unknown, path: unknown, body?: unknown, dot?: unknown) =>
 		vos.call(String(method), String(path), body, typeof dot === "string" ? dot : undefined),
 	);

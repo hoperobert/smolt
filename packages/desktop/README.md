@@ -60,9 +60,9 @@ The browser gets `window.smolt` from `src/web-shim.ts`, the preload's API over `
 
 ## Vos
 
-The sidebar's Vos section is the user's Vos teammates (vos-api.vosgrau.com): roster, chats and group chats, routines, skills, Teach a task, auto-review rules, secret requests and the computers gallery. `src/main/vos.ts` holds the API key (encrypted with Electron safeStorage in `~/.smolt/vos.json`) and makes every Vos call, event stream and live-computer socket; the renderer asks for them by path through `window.smolt.vos*` and never sees the key. The client, types and helpers are shared with the TUI's `/vos` (`packages/coding-agent/src/extensions/vos/`).
+The sidebar's Vos section is the user's Vos teammates (vos-api.vosgrau.com): roster, chats and group chats, routines, skills, Teach a task, auto-review rules, secret requests and the computers gallery. The connect screen pairs by QR: the main process asks the server for a pairing, the page draws the QR locally, and the device key the phone's approval mints goes straight to the main process (pasting an API key is the fallback). `src/main/vos.ts` holds the key (encrypted with Electron safeStorage in `~/.smolt/vos.json`) and makes every Vos call, event stream and live-computer socket; the renderer asks for them by path through `window.smolt.vos*` and never sees the key. The client, types and helpers are shared with the TUI's `/vos` (`packages/coding-agent/src/extensions/vos/`).
 
-To work on it without a server, run the mock and connect to it (server `http://127.0.0.1:8787`, key `dev-vos-key`):
+To work on it without a server, run the mock and point the connect screen at `http://127.0.0.1:8787` (click the server name under the QR). The mock prints a `curl` that approves each pairing; the API-key fallback takes `dev-vos-key`:
 
 ```bash
 node packages/desktop/scripts/mock-vos.mjs

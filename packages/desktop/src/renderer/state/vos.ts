@@ -49,6 +49,17 @@ export interface LiveFrame {
 	at: number;
 }
 
+/** A pairing on the connect screen: its QR text (which carries the pairing code, not a key) and where it is. */
+export interface PairState {
+	id?: string;
+	qr?: string;
+	short?: string;
+	expiresAt?: string;
+	name?: string;
+	state: "starting" | "waiting" | "approved" | "denied" | "expired" | "error";
+	error?: string;
+}
+
 export interface TeachState extends TeachSession {
 	dot: string;
 	error?: string;
@@ -75,6 +86,8 @@ interface VosStore {
 	teach: TeachState | null;
 	/** A failure to show at the top of the section, until dismissed. */
 	notice: string | null;
+	/** Pairing with the phone, while the connect screen shows one. */
+	pair: PairState | null;
 	/** Sidebar disclosures. */
 	rosterOpen: boolean;
 	hiddenOpen: boolean;
@@ -98,6 +111,7 @@ export const vos: VosStore = {
 	live: new Map(),
 	teach: null,
 	notice: null,
+	pair: null,
 	rosterOpen: readFlag("smolt.vosRosterOpen", true),
 	hiddenOpen: false,
 };
@@ -211,6 +225,21 @@ export async function connectVos(url: string, key: string): Promise<string | nul
 	await refreshRoster();
 	openVos();
 	return null;
+}
+
+/** Ask the server for a pairing; the main process polls it and says how it went (`vos:pair`). */
+export async function startPair(url: string): Promise<void> {
+	vos.pair = { state: "starting" };
+	bumpVos();
+	const result = await api.vosPairStart(url);
+	vos.pair = result.ok ? { ...result.value, state: "waiting" } : { state: "error", error: result.error };
+	bumpVos();
+}
+
+export function cancelPair(): void {
+	if (vos.pair?.state === "waiting" || vos.pair?.state === "starting") void api.vosPairCancel();
+	vos.pair = null;
+	bumpVos();
 }
 
 export async function disconnectVos(): Promise<void> {
@@ -474,6 +503,21 @@ export function bootVos(): void {
 	api.onVosFrame(({ dot, image, w, h }) => {
 		vos.frames.set(dot, { image, w, h, at: Date.now() });
 		bumpVos();
+	});
+	api.onVosPair(({ id, state }) => {
+		if (!vos.pair || vos.pair.id !== id) return;
+		vos.pair = { ...vos.pair, state };
+		bumpVos();
+		if (state !== "approved") return;
+		// A beat on "Approved" before the section opens, so the change is seen.
+		setTimeout(() => {
+			vos.pair = null;
+			resetData();
+			void refreshConnection().then(async () => {
+				await refreshRoster();
+				openVos();
+			});
+		}, 900);
 	});
 	api.onVosLive(({ dot, state }) => {
 		vos.live.set(dot, state);

@@ -137,6 +137,15 @@ export interface SmoltApi {
 	/** Check and keep a key; an empty key keeps the one held and changes only the address. */
 	vosConnect(url: string, key: string): Promise<VosConnection>;
 	vosDisconnect(): Promise<VosConnection>;
+	/** Start pairing with the phone: the QR's text, six digits and expiry. The key never comes here. */
+	vosPairStart(
+		url: string,
+	): Promise<
+		| { ok: true; value: { id: string; qr: string; short?: string; expiresAt: string; name: string } }
+		| { ok: false; error: string; status: number }
+	>;
+	vosPairCancel(): Promise<void>;
+	onVosPair(cb: (state: { id: string; state: "approved" | "denied" | "expired" }) => void): void;
 	vosCall(method: string, path: string, body?: unknown, dot?: string): Promise<VosCallResult>;
 	/** Answer a secret request; the value is never kept on this side. */
 	vosSecret(dot: string, id: string, value: string): Promise<VosCallResult>;
@@ -164,6 +173,8 @@ export interface VosConnection {
 	/** "encrypted": kept with the OS keystore; "session": this run only; "env": from VOS_API_KEY. */
 	keySource: "encrypted" | "session" | "env" | "none";
 	canPersist: boolean;
+	/** The name this app was paired as, when its key came from the phone. */
+	deviceName?: string;
 	error?: string;
 }
 

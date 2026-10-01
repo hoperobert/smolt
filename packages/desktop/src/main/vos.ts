@@ -1,12 +1,16 @@
+import { hostname } from "node:os";
 import {
 	checkApiPath,
 	DEFAULT_VOS_URL,
+	deviceName,
 	normalizeBaseUrl,
+	pollPairing,
+	startPairing,
 	VosClient,
 	VosError,
 } from "../../../coding-agent/src/extensions/vos/client.ts";
 import { readVosFile, vosConfigPath, writeVosFile } from "../../../coding-agent/src/extensions/vos/config.ts";
-import type { VosEvent } from "../../../coding-agent/src/extensions/vos/types.ts";
+import type { PairPoll, VosEvent } from "../../../coding-agent/src/extensions/vos/types.ts";
 
 /**
  * The desktop's Vos connection, held in the main process.
@@ -37,7 +41,18 @@ export interface VosStatus {
 	keySource: VosKeySource;
 	/** Whether a key can be kept on disk, encrypted. */
 	canPersist: boolean;
+	/** The name this desktop was paired as, when its key came from the phone. */
+	deviceName?: string;
 	error?: string;
+}
+
+/** A pairing as the connect screen shows it. The QR text carries the pairing's code, never a key. */
+export interface VosPairing {
+	id: string;
+	qr: string;
+	short?: string;
+	expiresAt: string;
+	name: string;
 }
 
 export type VosCallResult = { ok: true; value: unknown } | { ok: false; error: string; status: number };
@@ -63,6 +78,10 @@ export interface VosServiceOptions {
 	fetch?: typeof fetch;
 	env?: NodeJS.ProcessEnv;
 	socket?: SocketFactory;
+	/** How often a pairing is polled; tests shorten it. */
+	pollMs?: number;
+	/** This machine's name, for the name the phone shows. */
+	host?: string;
 }
 
 const METHODS = new Set(["GET", "POST", "PATCH", "PUT", "DELETE"]);
@@ -124,6 +143,10 @@ export class VosService {
 		{ socket: LiveSocket; timer: ReturnType<typeof setInterval>; until: number }
 	>();
 	private sweeper: ReturnType<typeof setInterval> | undefined;
+	private pairName: string | undefined;
+	private pairing: { id: string; timer: ReturnType<typeof setTimeout> } | undefined;
+	private readonly pollMs: number;
+	private readonly host: string;
 
 	constructor(options: VosServiceOptions) {
 		this.cipher = options.cipher;
@@ -132,6 +155,8 @@ export class VosService {
 		this.fetchImpl = options.fetch;
 		this.env = options.env ?? process.env;
 		this.socket = options.socket;
+		this.pollMs = options.pollMs ?? 2000;
+		this.host = options.host ?? hostname();
 		this.load();
 		this.sweeper = setInterval(() => this.sweep(), 15_000);
 		this.sweeper.unref?.();
@@ -144,6 +169,7 @@ export class VosService {
 		} catch {
 			this.url = DEFAULT_VOS_URL;
 		}
+		this.pairName = file.desktopDeviceName;
 		if (file.encryptedKey && this.cipher.available()) {
 			try {
 				this.key = this.cipher.decrypt(file.encryptedKey);
@@ -171,6 +197,7 @@ export class VosService {
 			url: this.url,
 			keySource: this.keySource,
 			canPersist: this.cipher.available(),
+			...(this.pairName && this.keySource !== "env" ? { deviceName: this.pairName } : {}),
 			...(this.lastError ? { error: this.lastError } : {}),
 		};
 	}
@@ -194,31 +221,116 @@ export class VosService {
 		} catch (error) {
 			return { ...this.status(), error: error instanceof Error ? error.message : String(error) };
 		}
+		this.keep(base, nextKey);
+		return this.status();
+	}
+
+	/** Hold a key and keep it, encrypted, exactly as for a pasted one; `name` marks a paired device key. */
+	private keep(base: string, key: string, name?: string): void {
 		this.stopAll();
 		this.url = base;
-		this.key = nextKey;
+		this.key = key;
 		this.lastError = undefined;
+		this.pairName = name;
 		const file = readVosFile(this.path);
 		delete file.encryptedKey;
+		delete file.desktopDeviceName;
 		file.url = base;
+		if (name) file.desktopDeviceName = name;
 		if (this.cipher.available()) {
-			file.encryptedKey = this.cipher.encrypt(nextKey);
+			file.encryptedKey = this.cipher.encrypt(key);
 			this.keySource = "encrypted";
 		} else {
 			this.keySource = "session";
 		}
 		writeVosFile(file, this.path);
 		this.rebuild();
-		return this.status();
+	}
+
+	/**
+	 * Start pairing with the phone: the server hands out a pairing (the QR's
+	 * text and six digits), and this process polls it every two seconds. On
+	 * approval the poll carries the device key once; it is kept like a pasted
+	 * key and never crosses to the page. The page hears `vos:pair` states.
+	 */
+	async pairStart(
+		url: string,
+	): Promise<{ ok: true; value: VosPairing } | { ok: false; error: string; status: number }> {
+		this.pairCancel();
+		let base: string;
+		try {
+			base = normalizeBaseUrl(url || DEFAULT_VOS_URL);
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error), status: 0 };
+		}
+		const name = deviceName(this.host, "smolt-desktop");
+		let started: Awaited<ReturnType<typeof startPairing>>;
+		try {
+			started = await startPairing(base, name, "smolt-desktop", this.fetchImpl);
+		} catch (error) {
+			return {
+				ok: false,
+				error: error instanceof Error ? error.message : String(error),
+				status: error instanceof VosError ? error.status : 0,
+			};
+		}
+		const pairing = { id: started.id, timer: setTimeout(() => {}, 0) };
+		this.pairing = pairing;
+		const poll = async (): Promise<void> => {
+			if (this.pairing !== pairing) return;
+			let result: PairPoll | null = null;
+			try {
+				result = await pollPairing(base, started.id, started.code, this.fetchImpl);
+			} catch {
+				// A dropped poll is retried; the expiry decides when to stop.
+			}
+			if (this.pairing !== pairing) return;
+			if (result?.state === "approved" && result.key) {
+				this.pairing = undefined;
+				this.keep(base, result.key, name);
+				this.send("vos:pair", { id: started.id, state: "approved" });
+				return;
+			}
+			if (result && result.state !== "pending") {
+				this.pairing = undefined;
+				this.send("vos:pair", { id: started.id, state: result.state });
+				return;
+			}
+			if (Date.now() > Date.parse(started.expiresAt) + 5000) {
+				this.pairing = undefined;
+				this.send("vos:pair", { id: started.id, state: "expired" });
+				return;
+			}
+			pairing.timer = setTimeout(() => void poll(), this.pollMs);
+		};
+		pairing.timer = setTimeout(() => void poll(), this.pollMs);
+		return {
+			ok: true,
+			value: {
+				id: started.id,
+				qr: started.url,
+				expiresAt: started.expiresAt,
+				name,
+				...(started.short ? { short: started.short } : {}),
+			},
+		};
+	}
+
+	pairCancel(): void {
+		if (!this.pairing) return;
+		clearTimeout(this.pairing.timer);
+		this.pairing = undefined;
 	}
 
 	disconnect(): VosStatus {
 		this.stopAll();
 		const file = readVosFile(this.path);
-		if (file.encryptedKey) {
+		if (file.encryptedKey || file.desktopDeviceName) {
 			delete file.encryptedKey;
+			delete file.desktopDeviceName;
 			writeVosFile(file, this.path);
 		}
+		this.pairName = undefined;
 		this.key = "";
 		this.keySource = "none";
 		this.lastError = undefined;
@@ -435,6 +547,7 @@ export class VosService {
 
 	/** Stop everything, for good: tests and app shutdown. */
 	dispose(): void {
+		this.pairCancel();
 		this.stopAll();
 		if (this.sweeper) clearInterval(this.sweeper);
 	}

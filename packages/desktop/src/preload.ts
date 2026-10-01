@@ -128,6 +128,11 @@ contextBridge.exposeInMainWorld("smolt", {
 	vosStatus: (): Promise<unknown> => ipcRenderer.invoke("vos:status"),
 	vosConnect: (url: string, key: string): Promise<unknown> => ipcRenderer.invoke("vos:connect", url, key),
 	vosDisconnect: (): Promise<unknown> => ipcRenderer.invoke("vos:disconnect"),
+	vosPairStart: (url: string): Promise<unknown> => ipcRenderer.invoke("vos:pair-start", url),
+	vosPairCancel: (): Promise<void> => ipcRenderer.invoke("vos:pair-cancel"),
+	onVosPair: (cb: (state: unknown) => void): void => {
+		ipcRenderer.on("vos:pair", (_e, state) => cb(state));
+	},
 	vosCall: (method: string, path: string, body?: unknown, dot?: string): Promise<unknown> =>
 		ipcRenderer.invoke("vos:call", method, path, body, dot),
 	vosSecret: (dot: string, id: string, value: string): Promise<unknown> =>
