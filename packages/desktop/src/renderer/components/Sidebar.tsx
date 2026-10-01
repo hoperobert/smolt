@@ -184,8 +184,8 @@ const SessionEntry = memo(function SessionEntry({
 					"group/session flex items-center rounded-lg transition-colors",
 					// Active or selected rows are already told apart; hover must not repaint them.
 					!selected && !active && "hover:bg-accent/60",
-					active && "bg-primary/10",
-					selected && "bg-primary/20",
+					active && "bg-accent",
+					selected && "bg-primary/15",
 				)}
 						// Right-clicking outside the selection is a fresh start on this
 						// row, the way every file list behaves — the menu must never act
@@ -359,7 +359,7 @@ function Group({ label, rows, ambiguous }: { label: string; rows: SessionRow[]; 
 				<DropdownMenuTrigger asChild>
 					<button
 						type="button"
-						className="flex cursor-pointer select-none items-center gap-2 rounded-lg px-3 pt-7 pb-1 text-xs tracking-wide text-faint transition-colors hover:text-muted-foreground"
+						className="flex cursor-pointer select-none items-center gap-2 rounded-lg px-3 pt-6 pb-1 text-xs font-medium tracking-wide text-faint transition-colors hover:text-muted-foreground"
 						// Radix opens the menu on pointerdown; swallowing it keeps
 						// left-click as collapse/expand, with the menu on right-click only.
 						onPointerDown={(event) => {

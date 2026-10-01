@@ -702,9 +702,9 @@ function createWindow(): BrowserWindow {
 		height: 820,
 		minWidth: 720,
 		minHeight: 480,
-		backgroundColor: "#0a0b0e",
+		backgroundColor: "#0f0f11",
 		titleBarStyle: "hidden",
-		titleBarOverlay: { color: "#0a0b0e", symbolColor: "#aeb4bd", height: 36 },
+		titleBarOverlay: { color: "#0f0f11", symbolColor: "#a3a3ab", height: 36 },
 		show: false,
 		webPreferences: {
 			preload: join(__dirname, "preload.cjs"),
@@ -1509,11 +1509,11 @@ app.whenReady().then(async () => {
 			win.setTitleBarOverlay(
 				dimmed === true
 					? light
-						? { color: "#999897", symbolColor: "#3b3534", height: 36 }
-						: { color: "#060708", symbolColor: "#686c71", height: 36 }
+						? { color: "#979694", symbolColor: "#343436", height: 36 }
+						: { color: "#09090a", symbolColor: "#66666b", height: 36 }
 					: light
-						? { color: "#fffdfc", symbolColor: "#635956", height: 36 }
-						: { color: "#0a0b0e", symbolColor: "#aeb4bd", height: 36 },
+						? { color: "#fbfaf7", symbolColor: "#57575e", height: 36 }
+						: { color: "#0f0f11", symbolColor: "#a3a3ab", height: 36 },
 			);
 		} catch {
 			// Not every platform draws the overlay; the theme still applies.

@@ -291,7 +291,7 @@ function indexHtml(dist: string, token: string): string {
 	);
 	html = html.replace(
 		'<link rel="stylesheet" href="styles.css" />',
-		'<link rel="stylesheet" href="styles.css" />\n\t<link rel="stylesheet" href="mobile.css" />\n\t<meta name="theme-color" content="#0a0b0e" />\n\t<meta name="apple-mobile-web-app-capable" content="yes" />',
+		'<link rel="stylesheet" href="styles.css" />\n\t<link rel="stylesheet" href="mobile.css" />\n\t<meta name="theme-color" content="#0f0f11" />\n\t<meta name="apple-mobile-web-app-capable" content="yes" />',
 	);
 	html = html.replace(
 		'<script src="renderer.js"></script>',

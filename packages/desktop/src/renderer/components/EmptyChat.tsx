@@ -4,11 +4,9 @@ import { api } from "../lib/api.ts";
 import { applyStarter, projectName, switchToSession, type Starter } from "../state/app.ts";
 import { useApp } from "../state/useApp.ts";
 import { Tip } from "./ui/tooltip.tsx";
-import { WaterField } from "./WaterField.tsx";
-
 
 /**
- * What a chat shows before it has anything in it: the water, a greeting, and
+ * What a chat shows before it has anything in it: the mark, a greeting, and
  * the thing no other agent can put here — what this one has already learned.
  * The memory card quotes a MEMORY.md entry verbatim, receipts-style, because
  * the product claim is that it writes things down; showing the actual ink
@@ -242,10 +240,11 @@ export function EmptyChat() {
 		// margins, same paddings and line boxes as the real components, so the
 		// swap to content moves nothing and needs no entrance animation.
 		return (
-			<div className="relative pt-[11vh] @max-[550px]:pt-[6vh]">
-				<WaterField className="absolute inset-x-0 top-0 h-[28vh]" />
+			<div className="relative pt-[12vh] @max-[550px]:pt-[6vh]">
 				<div className="relative mx-auto flex max-w-[580px] flex-col items-center px-3" aria-hidden>
-					{/* Greeting: one text-xl line (20px × 1.4 ≈ 28px box), bar at cap height. */}
+					{/* The mark's slot, held so the greeting does not move when it paints. */}
+					<span className="mb-4 h-[22px]" />
+					{/* Greeting: one 22px line in a 28px box, bar at cap height. */}
 					<span className="flex h-[28px] items-center">
 						<span className="h-[14px] w-[260px] animate-pulse-soft rounded-full bg-muted-foreground/20" />
 					</span>
@@ -300,13 +299,16 @@ export function EmptyChat() {
 	}
 
 	return (
-		// Padding rather than a margin on the inner column, so the water band
-		// anchors to the true top of the panel instead of collapsing down to
-		// the greeting.
-		<div className="relative pt-[11vh] @max-[550px]:pt-[6vh]">
-			<WaterField className="absolute inset-x-0 top-0 h-[28vh]" />
+		<div className="relative pt-[12vh] @max-[550px]:pt-[6vh]">
 			<div className="relative mx-auto flex max-w-[580px] flex-col items-center px-3 text-center">
-				<h1 className="text-balance text-xl font-medium tracking-tight">
+				{/* The typefish, the one place the brand's salmon shows on this screen. */}
+				<span
+					aria-hidden
+					className="mb-4 font-mono text-[18px] leading-[22px] font-bold tracking-[-0.08em] text-salmon select-none"
+				>
+					&gt;&lt;&gt;
+				</span>
+				<h1 className="text-balance text-[22px] leading-[28px] font-semibold tracking-[-0.02em]">
 					{greeting()}
 					{inProject ? `, what's next in ${folder}?` : ", what shall we work on?"}
 				</h1>
