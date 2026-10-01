@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { api } from "./lib/api.ts";
 import { boot } from "./state/app.ts";
+import { bootVos } from "./state/vos.ts";
 
 /**
  * A render crash must read as a crash, never as a silent black window: the
@@ -39,6 +40,7 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
 }
 
 boot();
+bootVos();
 
 const root = document.getElementById("root");
 if (root) {

@@ -3,7 +3,18 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell, systemPreferences } from "electron";
+import {
+	app,
+	BrowserWindow,
+	clipboard,
+	dialog,
+	ipcMain,
+	Menu,
+	safeStorage,
+	session,
+	shell,
+	systemPreferences,
+} from "electron";
 import lockfile from "proper-lockfile";
 import {
 	appendPoolCredential,
@@ -38,6 +49,7 @@ import { ensureModel, isModelCached, speechStatus, stopSpeech, transcribeSamples
 import { makeCliRunner, suggestStarters } from "./starters.ts";
 import { collectStats } from "./stats.ts";
 import { checkNow, installUpdate, startUpdates, updateState } from "./updates.ts";
+import { type KeyCipher, VosService } from "./vos.ts";
 import { tapIpc, WebServer } from "./web-server.ts";
 import { checkoutBranch, createWorktree, listBranches, listWorktrees, removeWorktree, repoRoot } from "./worktrees.ts";
 
@@ -886,6 +898,39 @@ app.whenReady().then(async () => {
 			console.error(`web server: ${error instanceof Error ? error.message : String(error)}`);
 		});
 	}
+
+	// Vos, the user's AI teammates: the key and every call to the Vos API
+	// live here, never in the window. See vos.ts.
+	const vosCipher: KeyCipher = {
+		// Linux without a keyring falls back to a fixed plain-text "encryption";
+		// that is not storage worth trusting a key to, so it counts as none.
+		available: () =>
+			safeStorage.isEncryptionAvailable() &&
+			(process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"),
+		encrypt: (plain) => safeStorage.encryptString(plain).toString("base64"),
+		decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
+	};
+	const vos = new VosService({
+		cipher: vosCipher,
+		send: (channel, payload) => {
+			if (!win.isDestroyed()) win.webContents.send(channel, payload);
+		},
+	});
+	ipcMain.handle("vos:status", () => vos.status());
+	ipcMain.handle("vos:connect", (_e, url: unknown, key: unknown) => vos.connect(String(url ?? ""), String(key ?? "")));
+	ipcMain.handle("vos:disconnect", () => vos.disconnect());
+	ipcMain.handle("vos:call", (_e, method: unknown, path: unknown, body?: unknown, dot?: unknown) =>
+		vos.call(String(method), String(path), body, typeof dot === "string" ? dot : undefined),
+	);
+	ipcMain.handle("vos:secret", (_e, dot: unknown, id: unknown, value: unknown) =>
+		vos.answerSecret(String(dot), String(id), typeof value === "string" ? value : ""),
+	);
+	ipcMain.handle("vos:file", (_e, path: unknown) => vos.file(String(path)));
+	ipcMain.handle("vos:watch", (_e, dot: unknown) => vos.watch(String(dot)));
+	ipcMain.handle("vos:unwatch", (_e, dot: unknown) => vos.unwatch(String(dot)));
+	ipcMain.handle("vos:live-open", (_e, dot: unknown) => vos.liveOpen(String(dot)));
+	ipcMain.handle("vos:live-input", (_e, dot: unknown, input: unknown) => vos.liveInput(String(dot), input));
+	ipcMain.handle("vos:live-close", (_e, dot: unknown) => vos.liveClose(String(dot)));
 
 	let active: AgentSlot = {
 		id: ++slotSeq,

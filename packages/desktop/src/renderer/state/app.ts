@@ -394,6 +394,8 @@ interface AppState {
 	pinned: Set<string>;
 	archived: Set<string>;
 	collapsedGroups: Set<string>;
+	/** The main pane shows the Vos section instead of the chat. */
+	vosOpen: boolean;
 }
 
 export const app: AppState = {
@@ -505,6 +507,7 @@ export const app: AppState = {
 	pinned: new Set<string>(),
 	archived: new Set<string>(),
 	collapsedGroups: new Set<string>(),
+	vosOpen: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -2060,6 +2063,11 @@ let switchesInFlight = 0;
 const abandonedSwitches = new Set<string>();
 
 export async function switchToSession(path: string, options: { follow?: boolean } = {}): Promise<void> {
+	if (app.vosOpen) {
+		// Picking a chat from the sidebar leaves the Vos section for it.
+		app.vosOpen = false;
+		bump();
+	}
 	if (path === app.currentSessionPath) return;
 	switchesInFlight++;
 	try {
@@ -2225,6 +2233,10 @@ async function loadStoredMessages(path: string): Promise<void> {
 }
 
 export async function newSession(options: { follow?: boolean; temporary?: boolean } = {}): Promise<void> {
+	if (app.vosOpen) {
+		app.vosOpen = false;
+		bump();
+	}
 	// Already looking at an empty chat, saved or not: there is nothing to move
 	// to, and re-running the reset clears and reloads the view, which reads as a
 	// flicker. A mid-turn empty chat still gets the real move.

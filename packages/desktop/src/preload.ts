@@ -125,6 +125,31 @@ contextBridge.exposeInMainWorld("smolt", {
 	onSessionChanged: (cb: (info: { slot: number; path: string }) => void): void => {
 		ipcRenderer.on("session:changed", (_e, info) => cb(info));
 	},
+	vosStatus: (): Promise<unknown> => ipcRenderer.invoke("vos:status"),
+	vosConnect: (url: string, key: string): Promise<unknown> => ipcRenderer.invoke("vos:connect", url, key),
+	vosDisconnect: (): Promise<unknown> => ipcRenderer.invoke("vos:disconnect"),
+	vosCall: (method: string, path: string, body?: unknown, dot?: string): Promise<unknown> =>
+		ipcRenderer.invoke("vos:call", method, path, body, dot),
+	vosSecret: (dot: string, id: string, value: string): Promise<unknown> =>
+		ipcRenderer.invoke("vos:secret", dot, id, value),
+	vosFile: (path: string): Promise<unknown> => ipcRenderer.invoke("vos:file", path),
+	vosWatch: (dot: string): Promise<void> => ipcRenderer.invoke("vos:watch", dot),
+	vosUnwatch: (dot: string): Promise<void> => ipcRenderer.invoke("vos:unwatch", dot),
+	vosLiveOpen: (dot: string): Promise<unknown> => ipcRenderer.invoke("vos:live-open", dot),
+	vosLiveInput: (dot: string, input: unknown): Promise<unknown> => ipcRenderer.invoke("vos:live-input", dot, input),
+	vosLiveClose: (dot: string): Promise<void> => ipcRenderer.invoke("vos:live-close", dot),
+	onVosEvent: (cb: (event: unknown) => void): void => {
+		ipcRenderer.on("vos:event", (_e, event) => cb(event));
+	},
+	onVosStream: (cb: (state: unknown) => void): void => {
+		ipcRenderer.on("vos:stream", (_e, state) => cb(state));
+	},
+	onVosFrame: (cb: (frame: unknown) => void): void => {
+		ipcRenderer.on("vos:frame", (_e, frame) => cb(frame));
+	},
+	onVosLive: (cb: (state: unknown) => void): void => {
+		ipcRenderer.on("vos:live", (_e, state) => cb(state));
+	},
 	webServer: (): Promise<unknown> => ipcRenderer.invoke("app:web-server"),
 	setWebServer: (enabled: boolean): Promise<unknown> => ipcRenderer.invoke("app:web-server-set", enabled),
 	ready: (): void => ipcRenderer.send("renderer:ready"),

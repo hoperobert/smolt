@@ -93,7 +93,8 @@ export function Titlebar() {
 	// it yet, and goes as soon as the chat has turns. So the strip takes the
 	// question from exactly there: between them every chat says where it is,
 	// and neither says it over the other.
-	const hasTurns = state.chat.messages.length > 0;
+	// The Vos section names its own vos in its header; a chat title up here would be the wrong page's.
+	const hasTurns = state.chat.messages.length > 0 && !state.vosOpen;
 
 	return (
 		<div
@@ -134,7 +135,7 @@ export function Titlebar() {
 				/>
 				<TitlebarButton name="search" title="Search sessions (Ctrl+K)" onClick={() => toggleSessionSearch()} />
 			</div>
-			{state.temporaryChat ? (
+			{state.temporaryChat && !state.vosOpen ? (
 				// The ChatGPT-style marker: this chat is not being kept. It must
 				// read at a glance, before any turn runs, because its promise is
 				// about everything typed here, not just what already is.

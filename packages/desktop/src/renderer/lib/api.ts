@@ -132,11 +132,42 @@ export interface SmoltApi {
 	onReloadDeferred(cb: (info: { sessionPath: string }) => void): void;
 	/** The app moved to another chat, from this window or any other on it. */
 	onSessionChanged(cb: (info: { slot: number; path: string }) => void): void;
+	/** Vos: the connection lives in the main process, which holds the key. */
+	vosStatus(): Promise<VosConnection>;
+	/** Check and keep a key; an empty key keeps the one held and changes only the address. */
+	vosConnect(url: string, key: string): Promise<VosConnection>;
+	vosDisconnect(): Promise<VosConnection>;
+	vosCall(method: string, path: string, body?: unknown, dot?: string): Promise<VosCallResult>;
+	/** Answer a secret request; the value is never kept on this side. */
+	vosSecret(dot: string, id: string, value: string): Promise<VosCallResult>;
+	/** A file the API serves, as a data URL. */
+	vosFile(path: string): Promise<VosCallResult>;
+	/** Follow a thread's live events (a lease: renew it while the thread is open). */
+	vosWatch(dot: string): Promise<void>;
+	vosUnwatch(dot: string): Promise<void>;
+	vosLiveOpen(dot: string): Promise<VosCallResult>;
+	vosLiveInput(dot: string, input: unknown): Promise<VosCallResult>;
+	vosLiveClose(dot: string): Promise<void>;
+	onVosEvent(cb: (event: { dot: string; event: string; data: unknown; id?: string }) => void): void;
+	onVosStream(cb: (state: { dot: string; state: "connecting" | "live" | "error"; error?: string }) => void): void;
+	onVosFrame(cb: (frame: { dot: string; w: number; h: number; cursor: unknown; image: string }) => void): void;
+	onVosLive(cb: (state: { dot: string; state: "open" | "closed" | "unavailable" }) => void): void;
 	/** The in-app web server: whether it is on, and where to open it. */
 	webServer(): Promise<WebServerState>;
 	setWebServer(enabled: boolean): Promise<WebServerState>;
 	ready(): void;
 }
+
+export interface VosConnection {
+	connected: boolean;
+	url: string;
+	/** "encrypted": kept with the OS keystore; "session": this run only; "env": from VOS_API_KEY. */
+	keySource: "encrypted" | "session" | "env" | "none";
+	canPersist: boolean;
+	error?: string;
+}
+
+export type VosCallResult = { ok: true; value: unknown } | { ok: false; error: string; status: number };
 
 export interface WebServerState {
 	enabled: boolean;

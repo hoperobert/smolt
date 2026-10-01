@@ -57,3 +57,13 @@ through the same reducer the UI uses.
 Settings › General › "Local web server" serves the app in a browser from the running desktop process: the same agent, the same chats, one more window on them. It listens on `http://localhost:7332` and, when the machine has one, its Tailscale address, with HTTPS beside it on 7333 (a self-signed certificate made by openssl on first use; the browser warns once) — dictation needs the HTTPS one, because the microphone only exists in a secure context. The setting lives in `web-server.json` in the app's user-data folder (`{ "enabled": true, "port": 7332, "lan": false }`); `lan: true` binds every interface. There is no login: whoever can reach the port drives the agent.
 
 The browser gets `window.smolt` from `src/web-shim.ts`, the preload's API over `POST /invoke` and an SSE stream at `/events`; a test keeps the two in step. `src/main/web-server.ts` records every `ipcMain.handle` and mirrors every `webContents.send`, so a browser client sees exactly what the window sees. Every window shows the same chat: a message sent from one streams into all of them through the mirrored agent events, and a chat opened in one is followed by the others (`session:changed`, announced by the main process after every move; a window not already there loads the chat the way it loads any other).
+
+## Vos
+
+The sidebar's Vos section is the user's Vos teammates (vos-api.vosgrau.com): roster, chats and group chats, routines, skills, Teach a task, auto-review rules, secret requests and the computers gallery. `src/main/vos.ts` holds the API key (encrypted with Electron safeStorage in `~/.smolt/vos.json`) and makes every Vos call, event stream and live-computer socket; the renderer asks for them by path through `window.smolt.vos*` and never sees the key. The client, types and helpers are shared with the TUI's `/vos` (`packages/coding-agent/src/extensions/vos/`).
+
+To work on it without a server, run the mock and connect to it (server `http://127.0.0.1:8787`, key `dev-vos-key`):
+
+```bash
+node packages/desktop/scripts/mock-vos.mjs
+```
