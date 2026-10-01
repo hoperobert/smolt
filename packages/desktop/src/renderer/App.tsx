@@ -18,6 +18,7 @@ import {
 import { useApp } from "./state/useApp.ts";
 import { toggleVoice } from "./state/voice.ts";
 import { Composer } from "./components/Composer.tsx";
+import { NewChatPage } from "./components/EmptyChat.tsx";
 import { ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { ProviderDialog } from "./components/ProviderDialog.tsx";
 import { ExtensionDialog } from "./components/ExtensionDialog.tsx";
@@ -245,6 +246,11 @@ export function App() {
 				<main className="flex min-w-0 flex-1 flex-col pt-12 @container">
 					{state.vosOpen ? (
 						<VosView />
+					) : !state.chatLoading && state.chatEmpty && state.chat.messages.length === 0 ? (
+						// A chat with nothing in it yet: the composer sits in the middle of the page.
+						<NewChatPage>
+							<Composer />
+						</NewChatPage>
 					) : (
 						<>
 							<Transcript />

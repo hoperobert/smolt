@@ -2,7 +2,6 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { icon } from "../icons.ts";
 import { api } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
-import { EmptyChat } from "./EmptyChat.tsx";
 import { formatElapsed, formatTokens } from "../lib/format.ts";
 import { formatRate, ThroughputMeter } from "../lib/throughput.ts";
 import { renderMarkdown } from "../markdown.ts";
@@ -1325,7 +1324,6 @@ export function Transcript() {
 							<TurnSpinner size={22} />
 						</div>
 					)}
-					{!state.chatLoading && state.chatEmpty && state.chat.messages.length === 0 && <EmptyChat />}
 					{state.historyLoading && (
 						<div className="mb-6 flex justify-center">
 							<TurnSpinner />

@@ -330,6 +330,39 @@
 	animation: pulse-soft 1.3s ease-in-out infinite;
 }
 
+/* The typefish on the new-chat page swims a little: a slow drift and bob,
+   never far enough to read as motion in the corner of the eye. */
+@keyframes newchat-swim {
+	0%,
+	100% {
+		transform: translate(0, 0);
+	}
+	30% {
+		transform: translate(3px, -1.5px);
+	}
+	60% {
+		transform: translate(-1px, 1px);
+	}
+}
+.newchat-swim {
+	display: inline-block;
+	animation: newchat-swim 6s ease-in-out infinite;
+}
+/* What the new-chat page loads fades in over its skeleton. */
+@keyframes newchat-in {
+	from {
+		opacity: 0;
+		transform: translateY(2px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+.newchat-in {
+	animation: newchat-in 0.32s ease-out both;
+}
+
 /* Held invisible briefly, then fades in: loads that finish inside the delay
    never flash their spinner at all. */
 @keyframes appear {
