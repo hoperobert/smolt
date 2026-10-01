@@ -437,7 +437,14 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				try {
 					await run(args, ctx);
 				} catch (error) {
-					const message = error instanceof VosError || error instanceof Error ? error.message : String(error);
+					if (error instanceof VosError && error.status === 401) {
+						ctx.ui.notify(
+							"Vos refused this terminal's key (revoked in the Vos app?). Run /vos connect to pair again.",
+							"error",
+						);
+						return;
+					}
+					const message = error instanceof Error ? error.message : String(error);
 					ctx.ui.notify(`Vos: ${message}`, "error");
 				}
 			},

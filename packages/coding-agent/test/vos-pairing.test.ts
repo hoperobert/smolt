@@ -145,3 +145,24 @@ describe("/vos connect in the terminal", () => {
 		expect(pairingQrLines(PAIR)[0]).toMatch(/^\x1b\[38;2;255;255;255m\x1b\[48;2;0;0;0m/);
 	});
 });
+
+describe("a revoked key", () => {
+	test("tells the terminal to pair again", async () => {
+		const notes: string[] = [];
+		const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+		const smolt = {
+			registerCommand: (name: string, options: { handler: (args: string, ctx: unknown) => Promise<void> }) =>
+				commands.set(name, options),
+			sendMessage: () => {},
+			on: () => {},
+		} as unknown as ExtensionAPI;
+		const fetchImpl = (async () =>
+			new Response(JSON.stringify({ error: "Missing or wrong API key." }), { status: 401 })) as typeof fetch;
+		createVosExtension({
+			env: { VOS_API_KEY: "vosd_gone", SMOLT_VOS_CONFIG: join(tmpdir(), "none.json") },
+			fetch: fetchImpl,
+		})(smolt);
+		await commands.get("vos")!.handler("", { ui: { notify: (t: string) => notes.push(t), setStatus: () => {} } });
+		expect(notes[0]).toContain("/vos connect");
+	});
+});
