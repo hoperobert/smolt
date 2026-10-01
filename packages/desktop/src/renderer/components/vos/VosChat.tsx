@@ -60,7 +60,7 @@ function TaskCard({ task }: { task: Task }) {
 	const now = useTick(running);
 	const plan = task.plan?.length ? task.plan : task.steps.map((s) => ({ text: s.text, status: s.done ? "done" : "doing" }));
 	return (
-		<div className="mt-2 w-full max-w-[520px] overflow-hidden rounded-xl border bg-card/70">
+		<div id={`vos-task-${task.id}`} className="mt-2 w-full max-w-[520px] overflow-hidden rounded-xl border bg-card/70">
 			<div className="flex items-center gap-2 px-3.5 pt-3 pb-2">
 				<span
 					className={cn(
@@ -108,7 +108,7 @@ function TaskCard({ task }: { task: Task }) {
 								{step.status === "done" ? (
 									<Icon name="check" className="text-ok [&>svg]:size-3.5" />
 								) : step.status === "doing" ? (
-									<span className="size-2 animate-pulse-soft rounded-full bg-tint" />
+									<span className={cn("size-2 rounded-full bg-tint", running ? "animate-pulse-soft" : "opacity-50")} />
 								) : (
 									<span className="size-2 rounded-full border border-faint" />
 								)}
@@ -125,8 +125,26 @@ function TaskCard({ task }: { task: Task }) {
 					<span className="flex-none font-mono text-[11.5px] tabular-nums text-faint">{elapsed(task.nowAt, now)}</span>
 				</div>
 			)}
-			{!running && task.result && (
-				<div className="border-t px-3.5 py-2 text-[13px] text-muted-foreground">{task.result}</div>
+			{!running && task.result && <TaskResult text={task.result} />}
+		</div>
+	);
+}
+
+/** A finished task's own account of itself; long ones fold to a few lines. */
+function TaskResult({ text }: { text: string }) {
+	const [open, setOpen] = useState(false);
+	const long = text.length > 320;
+	return (
+		<div className="border-t px-3.5 py-2 text-[13px] leading-relaxed text-muted-foreground">
+			<p className={cn("whitespace-pre-wrap", long && !open && "line-clamp-4")}>{text}</p>
+			{long && (
+				<button
+					type="button"
+					onClick={() => setOpen(!open)}
+					className="mt-1 text-[12px] font-medium text-tint-text hover:underline"
+				>
+					{open ? "Show less" : "Show more"}
+				</button>
 			)}
 		</div>
 	);
@@ -430,6 +448,22 @@ function MessageLink({ message }: { message: Message }) {
 			</button>
 		);
 	}
+	if (link.target.type === "task") {
+		const id = link.target.id;
+		return (
+			<button
+				type="button"
+				onClick={() => {
+					const card = document.getElementById(`vos-task-${id}`);
+					card?.scrollIntoView({ behavior: "smooth", block: "center" });
+					card?.animate([{ outlineColor: "var(--ring)" }, { outlineColor: "transparent" }], { duration: 1200 });
+				}}
+				className="mt-2 inline-flex items-center gap-1 text-[13px] font-medium text-tint-text hover:underline"
+			>
+				{link.label}
+			</button>
+		);
+	}
 	return <span className="mt-2 inline-block text-[13px] text-faint">{link.label}</span>;
 }
 
@@ -524,6 +558,8 @@ function Composer({ dot, busy, members }: { dot: string; busy: boolean; members:
 					},
 				}));
 	const open = items.length > 0;
+	// "/" with nothing to offer says why, instead of showing nothing at all.
+	const noSkills = slash !== null && v.skills !== null && v.skills.length === 0;
 	const index = Math.min(pick, Math.max(0, items.length - 1));
 
 	const submit = async (): Promise<void> => {
@@ -556,6 +592,11 @@ function Composer({ dot, busy, members }: { dot: string; busy: boolean; members:
 
 	return (
 		<div className="relative mx-auto w-full max-w-[760px] px-6 pb-5">
+			{noSkills && (
+				<div className="absolute right-6 bottom-full left-6 mb-2 rounded-xl border bg-popover px-3.5 py-2.5 text-[12.5px] text-muted-foreground shadow-[0_12px_32px_-12px_rgba(var(--shadow-rgb),0.45)]">
+					No skills yet. Teach one, or write one under Skills; they show up here as / commands.
+				</div>
+			)}
 			{open && (
 				<div
 					role="listbox"
@@ -638,7 +679,14 @@ export function VosChat({ dot }: { dot: string }) {
 	const members = group
 		? group.members.map((id) => roster?.dots.find((d) => d.id === id)).filter((d): d is RosterDot => !!d)
 		: [];
-	const running = [...thread.tasks.values()].some((t) => t.status === "inProgress" || t.status === "waiting");
+	// A task left "in progress" by a server restart is not work happening now:
+	// only one that has said so lately (its heartbeat or live line) counts.
+	const now = Date.now();
+	const running = [...thread.tasks.values()].some(
+		(t) =>
+			(t.status === "inProgress" || t.status === "waiting") &&
+			((t.heartbeat?.at ?? 0) > now - 90_000 || Date.parse(t.nowAt ?? "") > now - 5 * 60_000),
+	);
 	const busy = isBusy(thread.status.mood) || running;
 
 	const last = thread.messages.at(-1);

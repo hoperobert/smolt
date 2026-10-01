@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { vosColor } from "../../../../../coding-agent/src/extensions/vos/format.ts";
+import { ago, vosColor } from "../../../../../coding-agent/src/extensions/vos/format.ts";
 import type { Dot, Group, Share } from "../../../../../coding-agent/src/extensions/vos/types.ts";
 import { api } from "../../lib/api.ts";
 import { cn } from "../../lib/cn.ts";
@@ -43,8 +43,9 @@ const toDraft = (d: Dot): Draft => ({
 
 function ShareCard({ dot }: { dot: Dot }) {
 	const v = useVos();
-	const [made, setMade] = useState<Share | null>(null);
-	const mine = (v.shares ?? []).filter((s) => !s.vos || s.vos === dot.id);
+	const [fresh, setFresh] = useState<string | null>(null);
+	const [copied, setCopied] = useState<string | null>(null);
+	const mine = (v.shares ?? []).filter((s) => s.vos === dot.id);
 	return (
 		<Card>
 			<div className="flex items-start justify-between gap-3">
@@ -62,7 +63,7 @@ function ShareCard({ dot }: { dot: Dot }) {
 					onClick={async () => {
 						const share = await attempt(() => vosCall<Share>("POST", `/dots/${encodeURIComponent(dot.id)}/share`, {}));
 						if (share) {
-							setMade(share);
+							setFresh(share.code);
 							await loadShares();
 						}
 					}}
@@ -70,29 +71,36 @@ function ShareCard({ dot }: { dot: Dot }) {
 					Make a link
 				</Button>
 			</div>
-			{made && (
-				<div className="mt-3 flex items-center gap-2 rounded-lg bg-background/60 px-3 py-2">
-					<code className="min-w-0 flex-1 truncate font-mono text-[12px]">{made.url}</code>
-					<Button size="xs" variant="ghost" onClick={() => void api.copyText(made.url)}>
-						Copy
-					</Button>
-				</div>
-			)}
 			{mine.length > 0 && (
-				<ul className="mt-3 flex flex-col gap-1 border-t pt-3">
+				<ul className="mt-3 flex flex-col gap-1.5">
 					{mine.map((share) => (
-						<li key={share.code} className="flex items-center gap-2 text-[12.5px]">
+						<li
+							key={share.code}
+							className={cn(
+								"flex items-center gap-2 rounded-lg px-3 py-1.5 text-[12.5px] transition-colors",
+								share.code === fresh ? "bg-tint/10" : "bg-background/60",
+							)}
+						>
 							<code className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{share.url}</code>
+							{share.createdAt && <span className="flex-none text-[11.5px] text-faint">{ago(share.createdAt)}</span>}
+							<Button
+								size="xs"
+								variant="ghost"
+								onClick={async () => {
+									await api.copyText(share.url);
+									setCopied(share.code);
+									setTimeout(() => setCopied((c) => (c === share.code ? null : c)), 1500);
+								}}
+							>
+								{copied === share.code ? "Copied" : "Copy"}
+							</Button>
 							<Button
 								size="xs"
 								variant="ghost"
 								className="text-destructive hover:text-destructive"
 								onClick={async () => {
 									const done = await attempt(() => vosCall("DELETE", `/shares/${encodeURIComponent(share.code)}`));
-									if (done !== undefined) {
-										if (made?.code === share.code) setMade(null);
-										await loadShares();
-									}
+									if (done !== undefined) await loadShares();
 								}}
 							>
 								Revoke

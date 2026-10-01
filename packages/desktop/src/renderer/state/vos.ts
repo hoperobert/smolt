@@ -184,8 +184,35 @@ export class VosCallError extends Error {
 /** One Vos API call through the main process; throws with the server's message. */
 export async function vosCall<T>(method: string, path: string, body?: unknown, dot?: string): Promise<T> {
 	const result: VosCallResult = await api.vosCall(method, path, body, dot);
+	if (!result.ok && result.status === 401 && vos.connection?.connected) void keyRefused();
 	if (!result.ok) throw new VosCallError(result.error, result.status);
 	return result.value as T;
+}
+
+/**
+ * The server stopped accepting this app's key (revoked on the phone, or the
+ * server's key changed). Holding on to it only fails every call, so forget it
+ * and say why on the connect screen.
+ */
+let refusing = false;
+async function keyRefused(): Promise<void> {
+	if (refusing) return;
+	refusing = true;
+	try {
+		const paired = !!vos.connection?.deviceName;
+		await disconnectVos();
+		if (vos.connection) {
+			vos.connection = {
+				...vos.connection,
+				error: paired
+					? "This computer's key was revoked in the Vos app. Pair again to reconnect."
+					: "The Vos server no longer accepts this API key. Connect again.",
+			};
+		}
+		bumpVos();
+	} finally {
+		refusing = false;
+	}
 }
 
 /** Run an action; a failure lands in the section's notice instead of vanishing. */
@@ -312,6 +339,8 @@ export function closeVos(): void {
 
 export function setTab(tab: VosTab): void {
 	vos.tab = tab;
+	// A failure belongs to the page it happened on.
+	vos.notice = null;
 	bumpVos();
 	void loadTab();
 }
@@ -319,10 +348,11 @@ export function setTab(tab: VosTab): void {
 export async function selectThread(dot: string): Promise<void> {
 	const previous = vos.selected;
 	vos.selected = dot;
+	if (previous !== dot) vos.notice = null;
 	app.vosOpen = true;
 	bumpApp();
-	// A group has no routines, teach or profile of its own: those pages follow the lead.
-	if (isGroupThread(dot) && (vos.tab === "teach" || vos.tab === "profile")) vos.tab = "chat";
+	// A group has no routines or teach of its own (its Profile tab is the group's settings).
+	if (isGroupThread(dot) && (vos.tab === "teach" || vos.tab === "routines")) vos.tab = "chat";
 	bumpVos();
 	if (previous && previous !== dot) void api.vosUnwatch(previous);
 	void api.vosWatch(dot);

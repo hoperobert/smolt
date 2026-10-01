@@ -99,6 +99,12 @@ export function VosConnect() {
 					</p>
 				</div>
 
+				{mode === "pair" && v.connection?.error && (
+					<p role="alert" className="rounded-lg border border-warn/35 bg-warn/[0.07] px-3 py-2 text-[13px] text-warn">
+						{v.connection.error}
+					</p>
+				)}
+
 				{mode === "pair" && !editingServer && (
 					<div className="flex flex-col items-center gap-4">
 						{pair?.qr ? (

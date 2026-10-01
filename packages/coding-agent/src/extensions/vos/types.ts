@@ -118,6 +118,8 @@ export interface Task {
 	/** What it is doing this moment, and since when: the card's live line. */
 	now?: string;
 	nowAt?: string;
+	/** The server process running it, and when it last said so (every 15 s while it runs). */
+	heartbeat?: { by: string; at: number };
 }
 
 export type ActionKind =
