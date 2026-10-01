@@ -285,3 +285,33 @@ export interface VosEvent {
 	data: unknown;
 	id?: string;
 }
+
+/** A pairing in progress, from `POST /pair` (outside /v1, no key). */
+export interface PairStart {
+	id: string;
+	/** Secret: it is what lets this pair's poll receive the key. Only ever shown inside the QR. */
+	code: string;
+	/** Six digits to type into the phone instead of scanning. */
+	short?: string;
+	expiresAt: string;
+	/** `vos://pair?s=…&id=…&c=…`: what the QR encodes. */
+	url: string;
+}
+
+export type PairKind = "smolt-desktop" | "smolt-tui";
+
+/** `GET /pair/:id?c=` while waiting; `key` comes exactly once, on the first poll after approval. */
+export interface PairPoll {
+	state: "pending" | "approved" | "denied" | "expired";
+	key?: string;
+	server?: string;
+}
+
+/** A device key as the phone lists them (`GET /v1/keys`). */
+export interface DeviceKey {
+	id: string;
+	name: string;
+	kind: string;
+	createdAt: string;
+	lastUsedAt?: string;
+}

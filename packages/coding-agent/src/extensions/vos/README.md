@@ -10,13 +10,15 @@
 | `/vos skills` | The shared skills library |
 | `/vos rules` | Auto-review rules |
 | `/vos groups` | Group chats and their members |
-| `/vos connect` | How to set it up |
+| `/vos connect` | Pairs with your phone: a QR above the prompt and a six-digit code; approve in the Vos app. `/vos connect help` explains the API-key way |
 
 ## Key
 
-The TUI reads the API key from `VOS_API_KEY` (server from `VOS_URL`, default
-`https://vos-api.vosgrau.com`), or from an `apiKey` the user writes into
-`~/.smolt/vos.json`. The desktop app's Vos section writes the same file, but
+`/vos connect` asks the server for a pairing (`POST /pair`), draws its QR
+locally (`qr.ts`, no dependency), and polls until the phone approves; the
+device key it receives is written to `~/.smolt/vos.json` as `apiKey`, mode
+0600, and can be revoked from the phone. `VOS_API_KEY` (server from
+`VOS_URL`, default `https://vos-api.vosgrau.com`) still works and wins. The desktop app's Vos section writes the same file, but
 its key is encrypted with Electron safeStorage (the OS keystore), which only
 the desktop app can decrypt, so the TUI cannot read that one. Secret requests
 are never answered from the TUI.

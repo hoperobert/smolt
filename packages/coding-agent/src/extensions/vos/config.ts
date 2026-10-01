@@ -8,7 +8,8 @@ import { DEFAULT_VOS_URL, normalizeBaseUrl } from "./client.ts";
  *
  *   { "url": "https://vos-api.vosgrau.com",
  *     "encryptedKey": "<base64>",   // written by the desktop app: Electron safeStorage (OS keychain/DPAPI)
- *     "apiKey": "<key>" }           // optional, written by the user for the TUI
+ *     "apiKey": "<key>",            // the TUI's: from pairing (/vos connect), or written by the user
+ *     "deviceName": "…" }           // what the TUI was paired as
  *
  * The desktop app stores the key encrypted with the operating system's
  * keystore, which only the desktop app can decrypt. The TUI therefore reads
@@ -21,6 +22,10 @@ export interface VosFile {
 	url?: string;
 	encryptedKey?: string;
 	apiKey?: string;
+	/** What the TUI was paired as, when its `apiKey` came from pairing. */
+	deviceName?: string;
+	/** What the desktop app was paired as, when its encrypted key came from pairing. */
+	desktopDeviceName?: string;
 }
 
 export function vosConfigPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -37,6 +42,8 @@ export function readVosFile(path: string = vosConfigPath()): VosFile {
 		if (typeof raw.url === "string") out.url = raw.url;
 		if (typeof raw.encryptedKey === "string") out.encryptedKey = raw.encryptedKey;
 		if (typeof raw.apiKey === "string") out.apiKey = raw.apiKey;
+		if (typeof raw.deviceName === "string") out.deviceName = raw.deviceName;
+		if (typeof raw.desktopDeviceName === "string") out.desktopDeviceName = raw.desktopDeviceName;
 		return out;
 	} catch {
 		return {};
@@ -64,6 +71,8 @@ export interface ResolvedVosConfig {
 	/** The file holds only the desktop app's encrypted key, which the TUI cannot read. */
 	desktopOnly: boolean;
 	path: string;
+	/** What the TUI was paired as, when its key came from pairing. */
+	deviceName?: string;
 }
 
 export function resolveVosConfig(env: NodeJS.ProcessEnv = process.env): ResolvedVosConfig {
@@ -78,6 +87,8 @@ export function resolveVosConfig(env: NodeJS.ProcessEnv = process.env): Resolved
 	const envKey = env.VOS_API_KEY?.trim();
 	if (envKey) return { url, apiKey: envKey, keySource: "env", desktopOnly: false, path };
 	const fileKey = file.apiKey?.trim();
-	if (fileKey) return { url, apiKey: fileKey, keySource: "file", desktopOnly: false, path };
+	if (fileKey) {
+		return { url, apiKey: fileKey, keySource: "file", desktopOnly: false, path, deviceName: file.deviceName };
+	}
 	return { url, desktopOnly: !!file.encryptedKey, path };
 }

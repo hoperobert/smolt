@@ -303,13 +303,15 @@ describe("/vos command", () => {
 		return { run: (args: string) => commands.get("vos")!.handler(args, ctx), said, notes, statuses };
 	}
 
-	test("without a key it explains how to connect", async () => {
+	test("without a key it points at /vos connect, whose help explains the API-key way", async () => {
 		const h = harness((async () => new Response("{}")) as typeof fetch, {
 			SMOLT_VOS_CONFIG: join(tmpdir(), "none.json"),
 		});
 		await h.run("");
+		expect(h.said).toEqual([]);
+		expect(h.notes[0]).toContain("/vos connect");
+		await h.run("connect help");
 		expect(h.said[0]).toContain("VOS_API_KEY");
-		expect(h.notes[0]).toContain("not connected");
 	});
 
 	test("roster, then a chat whose reply streams in", async () => {

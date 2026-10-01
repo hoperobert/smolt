@@ -4,6 +4,9 @@ import type {
 	Dot,
 	Group,
 	Message,
+	PairKind,
+	PairPoll,
+	PairStart,
 	Roster,
 	Routine,
 	RoutineRun,
@@ -69,6 +72,67 @@ export function checkApiPath(path: string): string {
 		throw new Error(`Not a Vos API path: ${path}`);
 	}
 	return path;
+}
+
+/**
+ * Pairing: smolt asks the server for a pairing, shows its QR, and polls
+ * until the phone approves it. Both calls are outside /v1 and carry no key;
+ * the pairing's `code` (inside the QR) is what entitles the poll to the
+ * device key the approval mints.
+ */
+export async function startPairing(
+	baseUrl: string,
+	name: string,
+	kind: PairKind,
+	fetchImpl: typeof fetch = fetch,
+): Promise<PairStart> {
+	const base = normalizeBaseUrl(baseUrl);
+	let response: Response;
+	try {
+		response = await fetchImpl(`${base}/pair`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name, kind }),
+			signal: AbortSignal.timeout(15_000),
+		});
+	} catch {
+		throw new VosError(`The Vos server could not be reached (${base}).`, 0);
+	}
+	const value = (await response.json().catch(() => null)) as (PairStart & { error?: string }) | null;
+	if (!response.ok || !value?.id || !value.code) {
+		const message =
+			value?.error ??
+			(response.status === 404
+				? "This Vos server cannot pair yet. Use an API key instead."
+				: response.status === 429
+					? "Too many pairing attempts. Wait a minute and try again."
+					: `The Vos server answered ${response.status}.`);
+		throw new VosError(message, response.status);
+	}
+	return value;
+}
+
+export async function pollPairing(
+	baseUrl: string,
+	id: string,
+	code: string,
+	fetchImpl: typeof fetch = fetch,
+): Promise<PairPoll> {
+	const base = normalizeBaseUrl(baseUrl);
+	const response = await fetchImpl(`${base}/pair/${encodeURIComponent(id)}?c=${encodeURIComponent(code)}`, {
+		signal: AbortSignal.timeout(15_000),
+	});
+	if (response.status === 404 || response.status === 410) return { state: "expired" };
+	const value = (await response.json().catch(() => null)) as PairPoll | null;
+	if (!response.ok || !value?.state)
+		throw new VosError(`The Vos server answered ${response.status}.`, response.status);
+	return value;
+}
+
+/** A name the phone will show for this device: "smolt on DESKTOP-ABC". */
+export function deviceName(host: string, kind: PairKind): string {
+	const clean = host.trim().replace(/\.local$/i, "") || "this computer";
+	return kind === "smolt-tui" ? `smolt (terminal) on ${clean}` : `smolt on ${clean}`;
 }
 
 export interface VosClientOptions {

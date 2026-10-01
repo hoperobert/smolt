@@ -1,8 +1,10 @@
 // Type-only import: a standalone install of this module outside the smolt
 // tree switches this single line to `from "smolt"`.
+
+import { hostname } from "node:os";
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
-import { groupDot, VosClient, VosError } from "./client.ts";
-import { type ResolvedVosConfig, resolveVosConfig } from "./config.ts";
+import { deviceName, groupDot, pollPairing, startPairing, VosClient, VosError } from "./client.ts";
+import { type ResolvedVosConfig, readVosFile, resolveVosConfig, writeVosFile } from "./config.ts";
 import {
 	ago,
 	decisionLabel,
@@ -13,7 +15,8 @@ import {
 	sortRoster,
 	unreadTotal,
 } from "./format.ts";
-import type { Group, Message, Roster, RosterDot, VosEvent, VosStatus } from "./types.ts";
+import { encodeQr, qrTerminal } from "./qr.ts";
+import type { Group, Message, PairStart, Roster, RosterDot, VosEvent, VosStatus } from "./types.ts";
 
 /**
  * /vos: the user's Vos teammates from the terminal.
@@ -24,11 +27,12 @@ import type { Group, Message, Roster, RosterDot, VosEvent, VosStatus } from "./t
  *   /vos skills                 the shared skills library
  *   /vos rules                  auto-review rules
  *   /vos groups                 group chats
- *   /vos connect                how to set it up
+ *   /vos connect                pair with the phone: a QR here, approved in the Vos app
  *
- * The key comes from VOS_API_KEY, or an `apiKey` the user wrote into
- * ~/.smolt/vos.json; see config.ts for why the desktop app's encrypted key
- * is not readable here.
+ * The key comes from VOS_API_KEY, or from ~/.smolt/vos.json's `apiKey`,
+ * which /vos connect writes when the phone approves a pairing (or the user
+ * writes by hand). See config.ts for why the desktop app's encrypted key is
+ * not readable here.
  */
 
 const SUBCOMMANDS = [
@@ -37,7 +41,7 @@ const SUBCOMMANDS = [
 	{ value: "skills", description: "The shared skills library" },
 	{ value: "rules", description: "Auto-review rules" },
 	{ value: "groups", description: "Group chats" },
-	{ value: "connect", description: "How to connect smolt to Vos" },
+	{ value: "connect", description: "Pair with your phone by QR (help: the API-key way)" },
 ];
 
 /** How long a sent message's replies are followed before the follow gives up. */
@@ -46,6 +50,10 @@ const FOLLOW_MS = 4 * 60_000;
 export interface VosExtensionOptions {
 	env?: NodeJS.ProcessEnv;
 	fetch?: typeof fetch;
+	/** How often a pairing is polled; tests shorten it. */
+	pollMs?: number;
+	/** This machine's name, for what the phone shows; tests fix it. */
+	host?: string;
 }
 
 /** A vos or group by name: exact, then prefix, case-insensitive; ids work too. */
@@ -84,21 +92,44 @@ export function connectHelp(config: ResolvedVosConfig): string {
 	const lines = [
 		"## Connect smolt to Vos",
 		"",
-		"The TUI reads the API key from the environment:",
+		"`/vos connect` pairs this terminal with your phone: scan the QR it shows and approve in the Vos app.",
+		"",
+		"Without a phone, the TUI takes an API key from the environment instead:",
 		"",
 		"```",
 		"export VOS_API_KEY=<your Vos API key>          # PowerShell: $env:VOS_API_KEY = '<key>'",
 		`export VOS_URL=${config.url}   # optional; this is the default`,
 		"```",
 		"",
-		`Or put \`"apiKey": "<key>"\` (and \`"url"\`) in ${config.path} yourself; keep that file private to your account.`,
-		"",
-		"The desktop app's Vos section stores its key encrypted by the operating system, which only the desktop app can read, so the TUI needs one of the two above.",
+		`The desktop app keeps its own key in ${config.path}, encrypted by the operating system; the TUI cannot read that one, so it pairs on its own.`,
 	];
-	if (config.desktopOnly) lines.push("", "This machine has a desktop-app key saved; the TUI still needs VOS_API_KEY.");
-	if (config.apiKey)
-		lines.push("", `A key is set (from ${config.keySource === "env" ? "VOS_API_KEY" : config.path}).`);
+	if (config.keySource === "env") lines.push("", "VOS_API_KEY is set, so the TUI uses it.");
+	else if (config.apiKey) {
+		lines.push("", `Connected${config.deviceName ? ` as ${config.deviceName}` : ""} (key in ${config.path}).`);
+	}
 	return lines.join("\n");
+}
+
+/** What the transcript says about a pairing; the QR itself is a widget above the prompt. */
+export function pairingMessage(pair: PairStart, minutes: number): string {
+	const digits = pair.short ? `${pair.short.slice(0, 3)} ${pair.short.slice(3)}` : "";
+	return [
+		"## Connect smolt to Vos",
+		"",
+		"Scan the QR above the prompt with your iPhone's camera, or in the Vos app (Settings › Connected devices › Scan), and approve with Face ID.",
+		...(digits ? ["", `No camera handy? Enter **${digits}** in the Vos app.`] : []),
+		"",
+		`The code expires in ${minutes} minute${minutes === 1 ? "" : "s"}. Waiting for your phone…`,
+	].join("\n");
+}
+
+/**
+ * The QR as terminal lines, white on black whatever the terminal's colours:
+ * scanners want dark modules on a light ground, and a light theme's default
+ * colours would invert it.
+ */
+export function pairingQrLines(pair: PairStart): string[] {
+	return qrTerminal(encodeQr(pair.url, "M")).map((line) => `\x1b[38;2;255;255;255m\x1b[48;2;0;0;0m${line}\x1b[0m`);
 }
 
 function rosterLine(d: RosterDot): string {
@@ -134,11 +165,13 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 			smolt.sendMessage({ customType: "vos", content, display: true });
 		};
 
+		/** The pairing waiting for the phone, if any: a new /vos connect replaces it. */
+		let pairing: AbortController | undefined;
+
 		const clientOr = (ctx: ExtensionCommandContext): VosClient | undefined => {
 			const config = resolveVosConfig(options.env ?? process.env);
 			if (!config.apiKey) {
-				say(connectHelp(config));
-				ctx.ui.notify("Vos is not connected: set VOS_API_KEY.", "warning");
+				ctx.ui.notify("Vos is not connected. Run /vos connect to pair with your phone.", "warning");
 				return undefined;
 			}
 			return new VosClient({ baseUrl: config.url, apiKey: config.apiKey, fetch: options.fetch });
@@ -195,12 +228,74 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				.finally(finish);
 		};
 
+		/**
+		 * Pair with the phone: show the QR and the six digits, then poll in the
+		 * background (the session stays usable) until it is approved, declined
+		 * or expires. The device key lands in ~/.smolt/vos.json, owner-only.
+		 */
+		const pair = async (config: ResolvedVosConfig, ctx: ExtensionCommandContext): Promise<void> => {
+			pairing?.abort();
+			const controller = new AbortController();
+			pairing = controller;
+			const name = deviceName(options.host ?? hostname(), "smolt-tui");
+			const started = await startPairing(config.url, name, "smolt-tui", options.fetch);
+			const expires = Date.parse(started.expiresAt);
+			say(pairingMessage(started, Math.max(1, Math.round((expires - Date.now()) / 60_000))));
+			ctx.ui.setStatus("vos", "Vos: waiting for your phone…");
+			const qrLines = pairingQrLines(started);
+			ctx.ui.setWidget("vos-pair", () => ({ render: () => qrLines, invalidate: () => {} }));
+			const every = options.pollMs ?? 2000;
+			void (async () => {
+				try {
+					while (!controller.signal.aborted) {
+						await new Promise((resolve) => setTimeout(resolve, every));
+						if (controller.signal.aborted) return;
+						const result = await pollPairing(config.url, started.id, started.code, options.fetch).catch(
+							() => null,
+						);
+						if (!result || result.state === "pending") {
+							if (Date.now() <= expires + 5000) continue;
+							say("The pairing code expired. Run `/vos connect` for a new one.");
+							return;
+						}
+						if (result.state === "approved" && result.key) {
+							writeVosFile(
+								{ ...readVosFile(config.path), url: config.url, apiKey: result.key, deviceName: name },
+								config.path,
+							);
+							say(
+								`Connected as **${name}**. The device key is saved in ${config.path}, readable only by you; revoke it any time in the Vos app (Settings › Connected devices). Try \`/vos\`.`,
+							);
+							return;
+						}
+						say(
+							result.state === "denied"
+								? "The pairing was declined on the phone."
+								: "The pairing code expired. Run `/vos connect` for a new one.",
+						);
+						return;
+					}
+				} finally {
+					if (pairing === controller) {
+						pairing = undefined;
+						ctx.ui.setWidget("vos-pair", undefined);
+					}
+					ctx.ui.setStatus("vos", undefined);
+				}
+			})();
+		};
+
 		const run = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 			const trimmed = args.trim();
 			const [sub = "", ...restWords] = trimmed.split(/\s+/);
 			const rest = trimmed.slice(sub.length).trim();
 			if (sub === "connect") {
-				say(connectHelp(resolveVosConfig(options.env ?? process.env)));
+				const config = resolveVosConfig(options.env ?? process.env);
+				if (restWords[0] === "help" || config.keySource === "env") {
+					say(connectHelp(config));
+					return;
+				}
+				await pair(config, ctx);
 				return;
 			}
 			const client = clientOr(ctx);
@@ -344,6 +439,7 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 		});
 
 		smolt.on("session_shutdown", async () => {
+			pairing?.abort();
 			for (const controller of following.values()) controller.abort();
 			following.clear();
 		});
