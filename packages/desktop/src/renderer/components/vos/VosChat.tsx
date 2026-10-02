@@ -33,6 +33,7 @@ import {
 } from "../../state/vos.ts";
 import { Button } from "../ui/button.tsx";
 import { Icon } from "../ui/icon.tsx";
+import { threadTimeline } from "../../state/vos-timeline.ts";
 import { VosAvatar, VosText } from "./parts.tsx";
 
 /** Re-render every second while mounted: the live line's timer. */
@@ -696,6 +697,8 @@ export function VosChat({ dot }: { dot: string }) {
 		if (el && pinned.current) el.scrollTop = el.scrollHeight;
 	}, [thread.messages.length, last?.id, thread.tasks, dot]);
 
+	const timeline = threadTimeline(thread.messages, thread.tasks.values());
+
 	const speakerOf = (m: Message) => {
 		if (m.role === "you") return null;
 		if (m.fromVos) return m.fromVos;
@@ -715,13 +718,25 @@ export function VosChat({ dot }: { dot: string }) {
 			>
 				<div className="mx-auto w-full max-w-[760px] px-6 pt-2 pb-6">
 					{!thread.loaded && <p className="py-10 text-center text-sm text-faint">Loading…</p>}
-					{thread.loaded && thread.messages.length === 0 && (
+					{thread.loaded && timeline.length === 0 && (
 						<p className="py-16 text-center text-sm text-muted-foreground">
 							{group ? `Say hello to ${group.name}.` : `Say hello to ${self?.name ?? "your vos"}.`}
 						</p>
 					)}
-					{thread.messages.map((m, i) => {
-						const prev = thread.messages[i - 1];
+					{timeline.map((item, i) => {
+						if (item.kind === "task") {
+							return (
+								<div key={`task-${item.task.id}`} className="mt-4 flex gap-3">
+									<div className="w-7 flex-none" />
+									<div className="min-w-0 flex-1">
+										<TaskCard task={item.task} />
+									</div>
+								</div>
+							);
+						}
+						const m = item.message;
+						const before = timeline[i - 1];
+						const prev = before?.kind === "message" ? before.message : undefined;
 						const speaker = speakerOf(m);
 						const prevSpeaker = prev ? speakerOf(prev) : undefined;
 						const first =
