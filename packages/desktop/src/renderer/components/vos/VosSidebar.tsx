@@ -50,17 +50,26 @@ function DotRow({ dot, active }: { dot: RosterDot; active: boolean }) {
 			onClick={() => openVos(dot.id)}
 			title={`${dot.name}${dot.label ? ` · ${dot.label}` : ""}${line ? ` · ${line}` : ""}`}
 		>
-			<VosAvatar name={dot.name} look={dot.look} id={dot.id} size={20} />
+			<VosAvatar
+				name={dot.name}
+				look={dot.look}
+				id={dot.id}
+				size={20}
+				mood={mood}
+				className="[--vos-avatar-ring:var(--background-deep)]"
+			/>
 			<span className={cn("min-w-0 flex-1 truncate", (dot.unread ?? 0) > 0 && "font-semibold text-foreground")}>
 				{dot.name}
-				{dot.label && <span className="ml-1.5 text-[12px] font-normal text-faint">{dot.label}</span>}
+				{line && (isBusy(mood) || mood === "needsYou") ? (
+					<span
+						className={cn("ml-1.5 text-[12px] font-normal", mood === "needsYou" ? "text-warn" : "text-tint-text")}
+					>
+						{line}
+					</span>
+				) : (
+					dot.label && <span className="ml-1.5 text-[12px] font-normal text-faint">{dot.label}</span>
+				)}
 			</span>
-			{isBusy(mood) && !dot.unread && (
-				<span className="size-1.5 flex-none animate-pulse-soft rounded-full bg-tint" aria-label="Working" />
-			)}
-			{mood === "needsYou" && !dot.unread && (
-				<span className="size-1.5 flex-none rounded-full bg-warn" aria-label="Needs you" />
-			)}
 			<Unread count={dot.unread} />
 		</Row>
 	);
