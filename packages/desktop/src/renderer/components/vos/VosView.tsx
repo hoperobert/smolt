@@ -1,4 +1,4 @@
-import { moodLabel } from "../../../../../coding-agent/src/extensions/vos/format.ts";
+import { isBusy, moodLabel } from "../../../../../coding-agent/src/extensions/vos/format.ts";
 import type { Group } from "../../../../../coding-agent/src/extensions/vos/types.ts";
 import { cn } from "../../lib/cn.ts";
 import { requestConfirm, requestInput } from "../../state/app.ts";
@@ -132,7 +132,17 @@ export function VosView() {
 	const status = thread?.status ?? self?.status;
 	const subtitle = group
 		? members.map((m) => m.name).join(", ")
-		: [self?.label, status && (status.statusLine || moodLabel(status.mood))].filter(Boolean).join(" · ");
+		: [
+				self?.label,
+				// Busy and needs-you get a chip of their own; idle says nothing.
+				status &&
+					!isBusy(status.mood) &&
+					status.mood !== "needsYou" &&
+					status.mood !== "idle" &&
+					(status.statusLine || moodLabel(status.mood)),
+			]
+				.filter(Boolean)
+				.join(" · ");
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col" data-vos-view>
@@ -160,6 +170,21 @@ export function VosView() {
 						</div>
 						{subtitle && <div className="truncate text-[12.5px] text-muted-foreground">{subtitle}</div>}
 					</div>
+					{!group && status && isBusy(status.mood) && (
+						<span className="flex min-w-0 max-w-[320px] flex-none items-center gap-1.5 rounded-full bg-tint/12 px-2 py-0.5 text-[11.5px] font-medium text-tint-text">
+							<span className="size-1.5 flex-none animate-pulse-soft rounded-full bg-tint" />
+							<span className="truncate">{status.statusLine || moodLabel(status.mood)}</span>
+						</span>
+					)}
+					{!group && status?.mood === "needsYou" && (
+						<button
+							type="button"
+							onClick={() => setTab("chat")}
+							className="flex-none rounded-full bg-warn/15 px-2 py-0.5 text-[11.5px] font-medium text-warn hover:bg-warn/25"
+						>
+							Needs you
+						</button>
+					)}
 					{thread?.stream === "error" && (
 						<span title={thread.error} className="flex-none rounded-full bg-warn/15 px-2 py-0.5 text-[11px] font-medium text-warn">
 							Reconnecting
