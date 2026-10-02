@@ -86,7 +86,7 @@ function TaskCard({ task }: { task: Task }) {
 					{STATUS_TEXT[task.status]}
 				</span>
 			</div>
-			{running && (
+			{running && task.status !== "waiting" && (
 				<div className="mx-3.5 mb-2 h-1 overflow-hidden rounded-full bg-muted">
 					<div
 						className="h-full rounded-full bg-tint transition-[width] duration-500"
@@ -121,8 +121,17 @@ function TaskCard({ task }: { task: Task }) {
 			)}
 			{running && task.now && (
 				<div className="flex items-center gap-2 border-t bg-background/40 px-3.5 py-2 text-[12.5px]">
-					<span className="size-1.5 flex-none animate-pulse-soft rounded-full bg-tint" />
-					<span className="min-w-0 flex-1 truncate text-muted-foreground">{task.now}</span>
+					<span
+						className={cn(
+							"size-1.5 flex-none rounded-full",
+							task.status === "waiting" ? "bg-warn" : "animate-pulse-soft bg-tint",
+						)}
+					/>
+					<span
+						className={cn("min-w-0 flex-1 truncate", task.status === "waiting" ? "text-warn" : "vos-shimmer")}
+					>
+						{task.now}
+					</span>
 					<span className="flex-none font-mono text-[11.5px] tabular-nums text-faint">{elapsed(task.nowAt, now)}</span>
 				</div>
 			)}
@@ -752,10 +761,20 @@ export function VosChat({ dot }: { dot: string }) {
 							Date.parse(m.date) - Date.parse(prev.date) > 10 * 60_000;
 						return <MessageRow key={m.id} dot={dot} message={m} thread={thread} speaker={speaker} first={first} />;
 					})}
-					{busy && !running && thread.status.statusLine && (
-						<div className="mt-4 flex items-center gap-2 pl-10 text-[12.5px] text-muted-foreground">
-							<span className="size-1.5 animate-pulse-soft rounded-full bg-tint" />
-							{thread.status.statusLine || moodLabel(thread.status.mood)}
+					{busy && !running && (
+						<div className="mt-4 flex items-center gap-3 text-[13px]">
+							{self && (
+								<VosAvatar
+									name={self.name}
+									look={self.look}
+									id={self.id}
+									size={28}
+									mood={thread.status.mood}
+								/>
+							)}
+							<span className={cn("vos-shimmer min-w-0 truncate", !self && "pl-10")}>
+								{thread.status.statusLine || moodLabel(thread.status.mood)}
+							</span>
 						</div>
 					)}
 				</div>

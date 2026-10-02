@@ -330,6 +330,36 @@
 	animation: pulse-soft 1.3s ease-in-out infinite;
 }
 
+/* A vos's live line: a soft light sweeps across the text while it works. */
+@keyframes vos-shimmer {
+	from {
+		background-position: 150% 0;
+	}
+	to {
+		background-position: -50% 0;
+	}
+}
+.vos-shimmer {
+	background: linear-gradient(
+			90deg,
+			var(--muted-foreground) 35%,
+			var(--foreground) 50%,
+			var(--muted-foreground) 65%
+		)
+		0 0 / 250% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	animation: vos-shimmer 2.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.vos-shimmer {
+		animation: none;
+		background: none;
+		color: var(--muted-foreground);
+	}
+}
+
 /* The typefish on the new-chat page swims a little: a slow drift and bob,
    never far enough to read as motion in the corner of the eye. */
 @keyframes newchat-swim {
