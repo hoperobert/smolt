@@ -56,7 +56,12 @@ function DotRow({ dot, active }: { dot: RosterDot; active: boolean }) {
 				id={dot.id}
 				size={20}
 				mood={mood}
-				className="[--vos-avatar-ring:var(--background-deep)]"
+				// The mood dot's ring cuts it out of the avatar in the row's own colour, hovered or picked.
+				className={
+					active
+						? "[--vos-avatar-ring:var(--accent)]"
+						: "[--vos-avatar-ring:var(--background-deep)] group-hover/vos:[--vos-avatar-ring:color-mix(in_srgb,var(--accent)_60%,var(--background-deep))]"
+				}
 			/>
 			<span className={cn("min-w-0 flex-1 truncate", (dot.unread ?? 0) > 0 && "font-semibold text-foreground")}>
 				{dot.name}
