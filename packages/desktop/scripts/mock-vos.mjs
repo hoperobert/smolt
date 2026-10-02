@@ -10,7 +10,13 @@
  * secret request, share links, Teach a task, the screens gallery, the SSE
  * stream at /v1/events and a minimal /v1/computer/live WebSocket that sends
  * generated PNG frames. Sending a message makes the vos "work" on a task for
- * a few seconds (steps, the live "now" line) and answer.
+ * a few seconds (steps, the live "now" line) and answer; say "slowly" in it
+ * and the vos thinks for 25 s first, with no task card yet.
+ *
+ * The seeded threads show every state a task card has: Rex works on one that
+ * never ends (its heartbeat and live line keep moving), Penny's waits on your
+ * OK, Ada has a finished and a failed one, and in the group chat Ada works on
+ * a task no message carries, with a quiet progress line after its last step.
  *
  * Dev only: nothing here is shipped, and the key is a placeholder.
  */
@@ -123,6 +129,9 @@ const fromVos = (id) => {
 	const d = dots.get(id);
 	return { id: d.id, name: d.name, look: d.look };
 };
+const beat = () => ({ by: "mock", at: Date.now() });
+/** Seeded tasks that stay running: [thread, task, live lines to cycle through (none: the line stays put)]. */
+const seededLive = [];
 
 {
 	const t = thread("main");
@@ -156,10 +165,52 @@ const fromVos = (id) => {
 		msg("vos", "**pgvector** wins for us: no new service to run, and recall is fine at our size. Full table:", { attachment: { type: "table", headers: ["Option", "Cost", "Fit"], rows: [["pgvector", "£0", "Good"], ["Pinecone", "£70/mo", "Great"], ["Qdrant", "£25/mo", "Great"]] } }, minutesAgo(220)),
 		msg("vos", "Report", { attachment: { type: "link", url: "https://example.com/report", title: "Vector DB comparison", detail: "6 pages, with sources" } }, minutesAgo(219)),
 	);
+	const failed = {
+		id: "task-ada-2",
+		title: "Get Pinecone's enterprise pricing",
+		prompt: "Can you get Pinecone's enterprise pricing too?",
+		status: "failed",
+		steps: [],
+		plan: [
+			{ text: "Open Pinecone's pricing page", status: "done" },
+			{ text: "Sign in to see the enterprise tier", status: "doing" },
+			{ text: "Add it to the comparison", status: "todo" },
+		],
+		progress: 0.4,
+		createdAt: minutesAgo(50),
+		finishedAt: minutesAgo(46),
+		result: "Couldn't sign in: Pinecone sent a code to your phone. Send it to me and I'll pick up where I stopped.",
+	};
+	a.tasks.set(failed.id, failed);
+	a.messages.push(
+		msg("you", "Can you get Pinecone's enterprise pricing too?", {}, minutesAgo(51)),
+		msg("vos", "Trying now.", { attachment: { type: "task", id: failed.id } }, minutesAgo(50)),
+	);
 	const p = thread("penny");
+	const pay = {
+		id: "task-penny-1",
+		title: "Pay this month's hosting invoice",
+		prompt: "Pay this month's hosting invoice",
+		status: "waiting",
+		steps: [],
+		plan: [
+			{ text: "Find Acme's invoice in your email", status: "done" },
+			{ text: "Check it against last month's", status: "done" },
+			{ text: "Pay it by card", status: "doing" },
+			{ text: "File the receipt", status: "todo" },
+		],
+		progress: 0.6,
+		createdAt: minutesAgo(9),
+		now: "Waiting for your OK on £240.00",
+		nowAt: minutesAgo(6),
+		heartbeat: beat(),
+	};
+	p.tasks.set(pay.id, pay);
+	seededLive.push(["penny", pay, []]);
+	p.messages.push(msg("you", "Pay this month's hosting invoice", {}, minutesAgo(10)));
 	const approval = {
 		id: "appr-1",
-		taskId: null,
+		taskId: pay.id,
 		kind: "purchase",
 		title: "Pay invoice #4411 from Acme Hosting",
 		detail: "£240.00 by card ending 4242",
@@ -189,8 +240,10 @@ const fromVos = (id) => {
 		createdAt: minutesAgo(4),
 		now: "Reading the build log",
 		nowAt: minutesAgo(1),
+		heartbeat: beat(),
 	};
 	r.tasks.set(live.id, live);
+	seededLive.push(["rex", live, ["Reading the build log", "Checking the health endpoint", "Comparing with yesterday's deploy"]]);
 	r.messages.push(msg("you", "Is staging healthy?", {}, minutesAgo(5)), msg("vos", "Looking now.", { attachment: { type: "task", id: live.id } }, minutesAgo(4)));
 	const g = thread("group:launch");
 	g.messages.push(
@@ -200,7 +253,46 @@ const fromVos = (id) => {
 		msg("vos", "On it: Linear, Raycast and Arc, with what worked for each.", { fromVos: fromVos("ada") }, minutesAgo(27)),
 		msg("vos", "Deploy freeze is set for Thursday 18:00.", { fromVos: fromVos("rex") }, minutesAgo(12)),
 	);
+	// Ada's work for the group: no message carries it, and her quiet progress line comes after its last
+	// step (a long one), as the server's "On it…" lines do. The group itself stays idle.
+	const comps = {
+		id: "task-group-1",
+		title: "Pull three comparable launches",
+		prompt: "@Ada can you pull three comparable launches for the post?",
+		status: "inProgress",
+		steps: [],
+		plan: [
+			{ text: "Find the launch posts for Linear, Raycast and Arc", status: "done" },
+			{ text: "Note what worked for each", status: "doing" },
+			{ text: "Write it up for the post", status: "todo" },
+		],
+		progress: 0.45,
+		createdAt: minutesAgo(26.5),
+		now: "Reading Arc's launch thread",
+		nowAt: minutesAgo(3),
+		heartbeat: beat(),
+	};
+	g.tasks.set(comps.id, comps);
+	seededLive.push(["group:launch", comps, []]);
+	g.messages.push(msg("vos", "Linear and Raycast done; Arc next.", { fromVos: fromVos("ada") }, minutesAgo(2)));
 }
+
+// Seeded running tasks keep beating every 15 s, as the server's do, and Rex's moves on a step now and then.
+let liveTick = 0;
+setInterval(() => {
+	liveTick++;
+	for (const [threadId, task, lines] of seededLive) {
+		if (task.status !== "inProgress" && task.status !== "waiting") continue;
+		task.heartbeat = beat();
+		if (lines.length && liveTick % 3 === 0) {
+			task.now = lines[(lines.indexOf(task.now) + 1) % lines.length];
+			task.nowAt = now();
+			const step = task.steps.at(-1);
+			if (step && !step.done) step.text = task.now;
+		}
+		emit(threadId, "task.updated", task);
+	}
+}, 15_000).unref();
 
 const routines = new Map([
 	["rt-1", { id: "rt-1", vos: "main", name: "Morning briefing", instructions: "Summarise my calendar, unread email and anything due today.", trigger: { type: "schedule", rrule: "FREQ=DAILY;BYHOUR=8;BYMINUTE=0", timezone: "Europe/London" }, enabled: true, nextRun: new Date(Date.now() + 9 * 3600_000).toISOString(), lastRunAt: minutesAgo(900), createdAt: minutesAgo(20_000), updatedAt: minutesAgo(900), runs: [{ id: "run-1", at: minutesAgo(900), cause: "schedule", taskId: null, status: "completed", summary: "3 meetings, 2 emails need you." }] }],
@@ -288,12 +380,18 @@ function work(threadId, text) {
 		createdAt: now(),
 		now: "Thinking",
 		nowAt: now(),
+		heartbeat: beat(),
 	};
 	const timers = [];
-	const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+	// "slowly" holds the thinking phase (no task card yet) long enough to look at.
+	const hold = /\bslowly\b/i.test(text) ? 25_000 : 0;
+	const at = (ms, fn) => timers.push(setTimeout(fn, hold + ms));
 	running.set(threadId, { timers, task });
-	setStatus(threadId, "thinking", "Thinking");
+	setStatus(threadId, "thinking", hold ? "Looking through your inbox" : "Thinking");
 	at(700, () => {
+		task.createdAt = now();
+		task.nowAt = now();
+		task.heartbeat = beat();
 		t.tasks.set(task.id, task);
 		emit(threadId, "task.created", task);
 		addMessage(threadId, msg("vos", skill ? `Running /${skill.slug}.` : "On it.", { ...extra, attachment: { type: "task", id: task.id } }));
@@ -308,6 +406,7 @@ function work(threadId, text) {
 			const doing = Math.min(task.plan.length - 1, Math.floor((i * task.plan.length) / nows.length));
 			task.plan = task.plan.map((p, j) => ({ ...p, status: j < doing ? "done" : j === doing ? "doing" : "todo" }));
 			task.steps.push({ id: uuid(), text: line, done: true, date: now() });
+			task.heartbeat = beat();
 			emit(threadId, "task.updated", task);
 			setStatus(threadId, "working", line);
 		}),
@@ -494,9 +593,17 @@ const server = http.createServer(async (req, res) => {
 			emit(threadId, "task.updated", r.task);
 			running.delete(threadId);
 		}
-		addMessage(threadId, msg("vos", r ? "Stopped." : "Stopped. Nothing else is running.", threadId.startsWith("group:") ? { fromVos: fromVos(vosId) } : {}));
+		const seeded = seededLive.filter(([id, task]) => id === threadId && (task.status === "inProgress" || task.status === "waiting"));
+		for (const [, task] of seeded) {
+			task.status = "cancelled";
+			task.finishedAt = now();
+			delete task.now;
+			emit(threadId, "task.updated", task);
+		}
+		const stopped = (r ? 1 : 0) + seeded.length;
+		addMessage(threadId, msg("vos", stopped ? "Stopped." : "Stopped. Nothing else is running.", threadId.startsWith("group:") ? { fromVos: fromVos(vosId) } : {}));
 		setStatus(threadId, "idle", "");
-		return json(res, 200, { ok: true, stopped: r ? 1 : 0 });
+		return json(res, 200, { ok: true, stopped });
 	}
 	if (seg[0] === "approvals" && seg[1] && method === "POST") {
 		const a = t.approvals.get(seg[1]);
