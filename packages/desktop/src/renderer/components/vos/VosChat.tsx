@@ -58,6 +58,8 @@ const STATUS_TEXT: Record<Task["status"], string> = {
 
 function TaskCard({ task }: { task: Task }) {
 	const running = task.status === "inProgress" || task.status === "waiting";
+	// Waiting is on the user: amber and still throughout, never the working spinner.
+	const waiting = task.status === "waiting";
 	const now = useTick(running);
 	const plan = task.plan?.length ? task.plan : task.steps.map((s) => ({ text: s.text, status: s.done ? "done" : "doing" }));
 	return (
@@ -66,25 +68,28 @@ function TaskCard({ task }: { task: Task }) {
 				<span
 					className={cn(
 						"flex size-5 flex-none items-center justify-center rounded-full",
-						running
-							? "text-tint"
-							: task.status === "completed"
-								? "text-ok"
-								: task.status === "failed"
-									? "text-warn"
-									: "text-faint",
+						waiting
+							? "text-warn"
+							: running
+								? "text-tint"
+								: task.status === "completed"
+									? "text-ok"
+									: task.status === "failed"
+										? "text-warn"
+										: "text-faint",
 					)}
 				>
 					<Icon
-						name={running ? "spinner" : task.status === "completed" ? "check" : "close"}
-						className={cn("[&>svg]:size-4", running && "animate-spin [animation-duration:1.4s]")}
+						name={waiting ? "info" : running ? "spinner" : task.status === "completed" ? "check" : "close"}
+						className={cn("[&>svg]:size-4", running && !waiting && "animate-spin [animation-duration:1.4s]")}
 					/>
 				</span>
 				<span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{task.title}</span>
 				<span
 					className={cn(
 						"flex-none rounded-full px-2 py-0.5 text-[11px] font-medium",
-						running && "bg-tint/12 text-tint-text",
+						running && !waiting && "bg-tint/12 text-tint-text",
+						waiting && "bg-warn/12 text-warn",
 						task.status === "completed" && "bg-ok/12 text-ok",
 						task.status === "failed" && "bg-warn/12 text-warn",
 						task.status === "cancelled" && "bg-muted text-muted-foreground",
@@ -93,7 +98,7 @@ function TaskCard({ task }: { task: Task }) {
 					{STATUS_TEXT[task.status]}
 				</span>
 			</div>
-			{running && task.status !== "waiting" && (
+			{running && !waiting && (
 				<div className="mx-3.5 mb-2 h-1 overflow-hidden rounded-full bg-muted">
 					<div
 						className="h-full rounded-full bg-tint transition-[width] duration-500"
@@ -119,7 +124,7 @@ function TaskCard({ task }: { task: Task }) {
 									{step.status === "done" ? (
 										<Icon name="check" className="text-ok [&>svg]:size-3.5" />
 									) : live ? (
-										<span className="size-2 animate-pulse-soft rounded-full bg-tint" />
+										<span className={cn("size-2 rounded-full", waiting ? "bg-warn" : "animate-pulse-soft bg-tint")} />
 									) : (
 										<span className="size-2 rounded-full border border-faint" />
 									)}
@@ -137,11 +142,11 @@ function TaskCard({ task }: { task: Task }) {
 					<span
 						className={cn(
 							"size-1.5 flex-none rounded-full",
-							task.status === "waiting" ? "bg-warn" : "animate-pulse-soft bg-tint",
+							waiting ? "bg-warn" : "animate-pulse-soft bg-tint",
 						)}
 					/>
 					<span
-						className={cn("min-w-0 flex-1 truncate", task.status === "waiting" ? "text-warn" : "vos-shimmer")}
+						className={cn("min-w-0 flex-1 truncate", waiting ? "text-warn" : "vos-shimmer")}
 					>
 						{task.now}
 					</span>
