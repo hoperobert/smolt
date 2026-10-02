@@ -66,7 +66,13 @@ function TaskCard({ task }: { task: Task }) {
 				<span
 					className={cn(
 						"flex size-5 flex-none items-center justify-center rounded-full",
-						running ? "text-tint" : task.status === "completed" ? "text-ok" : "text-faint",
+						running
+							? "text-tint"
+							: task.status === "completed"
+								? "text-ok"
+								: task.status === "failed"
+									? "text-warn"
+									: "text-faint",
 					)}
 				>
 					<Icon
@@ -80,7 +86,8 @@ function TaskCard({ task }: { task: Task }) {
 						"flex-none rounded-full px-2 py-0.5 text-[11px] font-medium",
 						running && "bg-tint/12 text-tint-text",
 						task.status === "completed" && "bg-ok/12 text-ok",
-						(task.status === "failed" || task.status === "cancelled") && "bg-muted text-muted-foreground",
+						task.status === "failed" && "bg-warn/12 text-warn",
+						task.status === "cancelled" && "bg-muted text-muted-foreground",
 					)}
 				>
 					{STATUS_TEXT[task.status]}
@@ -96,27 +103,33 @@ function TaskCard({ task }: { task: Task }) {
 			)}
 			{plan.length > 0 && (
 				<ol className="flex flex-col gap-1 px-3.5 pb-2.5">
-					{plan.map((step, i) => (
-						<li
-							// biome-ignore lint/suspicious/noArrayIndexKey: plan steps have no ids and never reorder
-							key={i}
-							className={cn(
-								"flex items-start gap-2 text-[13px] leading-snug",
-								step.status === "done" ? "text-muted-foreground" : step.status === "doing" ? "text-foreground" : "text-faint",
-							)}
-						>
-							<span className="mt-[3px] flex size-3.5 flex-none items-center justify-center">
-								{step.status === "done" ? (
-									<Icon name="check" className="text-ok [&>svg]:size-3.5" />
-								) : step.status === "doing" ? (
-									<span className={cn("size-2 rounded-full bg-tint", running ? "animate-pulse-soft" : "opacity-50")} />
-								) : (
-									<span className="size-2 rounded-full border border-faint" />
+					{plan.map((step, i) => {
+						// Only a running task has a step in hand; a finished one's leftovers read as skipped.
+						const live = running && step.status === "doing";
+						return (
+							<li
+								// biome-ignore lint/suspicious/noArrayIndexKey: plan steps have no ids and never reorder
+								key={i}
+								className={cn(
+									"flex items-start gap-2 text-[13px] leading-snug",
+									step.status === "done" ? "text-muted-foreground" : live ? "text-foreground" : "text-faint",
 								)}
-							</span>
-							<span className={cn(step.status === "done" && "line-through decoration-faint/60")}>{step.text}</span>
-						</li>
-					))}
+							>
+								<span className="mt-[3px] flex size-3.5 flex-none items-center justify-center">
+									{step.status === "done" ? (
+										<Icon name="check" className="text-ok [&>svg]:size-3.5" />
+									) : live ? (
+										<span className="size-2 animate-pulse-soft rounded-full bg-tint" />
+									) : (
+										<span className="size-2 rounded-full border border-faint" />
+									)}
+								</span>
+								<span className={cn(step.status === "done" && "line-through decoration-faint/60")}>
+									{step.text}
+								</span>
+							</li>
+						);
+					})}
 				</ol>
 			)}
 			{running && task.now && (
