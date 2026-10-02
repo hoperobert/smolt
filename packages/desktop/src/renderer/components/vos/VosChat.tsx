@@ -670,15 +670,16 @@ function Composer({ dot, busy, members }: { dot: string; busy: boolean; members:
 					className="max-h-[220px] min-h-[24px] flex-1 resize-none bg-transparent py-1 text-[14px] leading-relaxed outline-none placeholder:text-faint"
 				/>
 				{busy && (
+					// Alone, Stop takes Send's filled disc; beside Send (while typing) it steps back to an outline.
 					<Button
 						size="icon"
-						variant="outline"
+						variant={text.trim() ? "outline" : "default"}
 						className="size-8 flex-none rounded-full"
 						title="Stop what it's doing"
 						aria-label="Stop"
 						onClick={() => void stopThread(dot)}
 					>
-						<Icon name="stop" className="[&>svg]:size-3.5" />
+						<Icon name="stop" className={cn("[&>svg]:size-3.5", !text.trim() && "[&_rect]:fill-current")} />
 					</Button>
 				)}
 				{(!busy || text.trim()) && (
