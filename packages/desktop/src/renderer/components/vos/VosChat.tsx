@@ -644,25 +644,27 @@ function Composer({ dot, busy, members }: { dot: string; busy: boolean; members:
 				/>
 				{busy && (
 					<Button
-						size="sm"
+						size="icon"
 						variant="outline"
-						className="h-8 flex-none gap-1.5 rounded-full"
+						className="size-8 flex-none rounded-full"
 						title="Stop what it's doing"
+						aria-label="Stop"
 						onClick={() => void stopThread(dot)}
 					>
 						<Icon name="stop" className="[&>svg]:size-3.5" />
-						Stop
 					</Button>
 				)}
-				<Button
-					size="icon"
-					className="size-8 flex-none rounded-full"
-					title="Send"
-					disabled={!text.trim()}
-					onClick={() => void submit()}
-				>
-					<Icon name="send" />
-				</Button>
+				{(!busy || text.trim()) && (
+					<Button
+						size="icon"
+						className="size-8 flex-none rounded-full"
+						title="Send"
+						disabled={!text.trim()}
+						onClick={() => void submit()}
+					>
+						<Icon name="send" />
+					</Button>
+				)}
 			</div>
 		</div>
 	);
@@ -681,12 +683,16 @@ export function VosChat({ dot }: { dot: string }) {
 		? group.members.map((id) => roster?.dots.find((d) => d.id === id)).filter((d): d is RosterDot => !!d)
 		: [];
 	// A task left "in progress" by a server restart is not work happening now:
-	// only one that has said so lately (its heartbeat or live line) counts.
+	// only one that has said so lately (its heartbeat or live line) counts. Nor
+	// does one the vos has since talked past while idle (it stopped, or the card
+	// is stale): a real task sets a fresh live line on its next step.
 	const now = Date.now();
+	const lastVosAt = Date.parse([...thread.messages].reverse().find((m) => m.role !== "you")?.date ?? "") || 0;
 	const running = [...thread.tasks.values()].some(
 		(t) =>
 			(t.status === "inProgress" || t.status === "waiting") &&
-			((t.heartbeat?.at ?? 0) > now - 90_000 || Date.parse(t.nowAt ?? "") > now - 5 * 60_000),
+			((t.heartbeat?.at ?? 0) > now - 90_000 || Date.parse(t.nowAt ?? "") > now - 5 * 60_000) &&
+			!(thread.status.mood === "idle" && lastVosAt > (Date.parse(t.nowAt ?? "") || 0)),
 	);
 	const busy = isBusy(thread.status.mood) || running;
 
