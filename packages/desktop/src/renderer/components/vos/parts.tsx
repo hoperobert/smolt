@@ -39,18 +39,24 @@ export function VosAvatar({
 				{initials(name)}
 			</span>
 			{mood && mood !== "idle" && (
+				// The ring that cuts the dot out of the avatar stays solid; only a busy dot's fill pulses,
+				// so at its faintest it fades into the ring rather than into the avatar.
 				<span
 					aria-hidden
-					className={cn(
-						"absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-[var(--vos-avatar-ring,var(--background))]",
-						isBusy(mood) && "animate-pulse-soft bg-tint",
-						mood === "needsYou" && "bg-warn",
-						mood === "paused" && "bg-faint",
-						mood === "celebrating" && "bg-ok",
-						mood === "sad" && "bg-destructive",
-					)}
+					className="absolute -right-0.5 -bottom-0.5 rounded-full bg-[var(--vos-avatar-ring,var(--background))] p-0.5"
 					style={{ width: Math.max(8, size * 0.32), height: Math.max(8, size * 0.32) }}
-				/>
+				>
+					<span
+						className={cn(
+							"block size-full rounded-full",
+							isBusy(mood) && "animate-pulse-soft bg-tint",
+							mood === "needsYou" && "bg-warn",
+							mood === "paused" && "bg-faint",
+							mood === "celebrating" && "bg-ok",
+							mood === "sad" && "bg-destructive",
+						)}
+					/>
+				</span>
 			)}
 		</span>
 	);

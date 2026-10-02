@@ -24,7 +24,7 @@ import {
 } from "../ui/dropdown-menu.tsx";
 import { Icon } from "../ui/icon.tsx";
 import { VosAvatar } from "./parts.tsx";
-import { VosChat } from "./VosChat.tsx";
+import { revealNeedsYou, VosChat } from "./VosChat.tsx";
 import { VosComputers } from "./VosComputers.tsx";
 import { VosConnect } from "./VosConnect.tsx";
 import { GroupSettings, VosProfile } from "./VosProfile.tsx";
@@ -165,31 +165,41 @@ export function VosView() {
 						<VosAvatar name={self.name} look={self.look} id={self.id} size={34} mood={status?.mood} />
 					) : null}
 					<div className="min-w-0">
-						<div className="truncate text-[15px] font-semibold tracking-[-0.01em]">
-							{group?.name ?? self?.name ?? "Vos"}
+						{/* The state chips sit on the name's line, not floating between it and the subtitle. */}
+						<div className="flex min-w-0 items-center gap-2">
+							<div className="min-w-0 truncate text-[15px] font-semibold tracking-[-0.01em]">
+								{group?.name ?? self?.name ?? "Vos"}
+							</div>
+							{!group && status && isBusy(status.mood) && (
+								<span className="flex min-w-0 max-w-[320px] items-center gap-1.5 rounded-full bg-tint/12 px-2 py-0.5 text-[11.5px] font-medium text-tint-text">
+									<span className="size-1.5 flex-none animate-pulse-soft rounded-full bg-tint" />
+									<span className="truncate">{status.statusLine || moodLabel(status.mood)}</span>
+								</span>
+							)}
+							{!group && status?.mood === "needsYou" && (
+								<button
+									type="button"
+									title={status.statusLine || "Show what it's waiting on"}
+									onClick={() => {
+										if (tab !== "chat") setTab("chat");
+										revealNeedsYou();
+									}}
+									className="flex-none rounded-full bg-warn/15 px-2 py-0.5 text-[11.5px] font-medium text-warn transition-colors hover:bg-warn/25"
+								>
+									Needs you
+								</button>
+							)}
+							{thread?.stream === "error" && (
+								<span
+									title={thread.error}
+									className="flex-none rounded-full bg-warn/15 px-2 py-0.5 text-[11.5px] font-medium text-warn"
+								>
+									Reconnecting
+								</span>
+							)}
 						</div>
 						{subtitle && <div className="truncate text-[12.5px] text-muted-foreground">{subtitle}</div>}
 					</div>
-					{!group && status && isBusy(status.mood) && (
-						<span className="flex min-w-0 max-w-[320px] flex-none items-center gap-1.5 rounded-full bg-tint/12 px-2 py-0.5 text-[11.5px] font-medium text-tint-text">
-							<span className="size-1.5 flex-none animate-pulse-soft rounded-full bg-tint" />
-							<span className="truncate">{status.statusLine || moodLabel(status.mood)}</span>
-						</span>
-					)}
-					{!group && status?.mood === "needsYou" && (
-						<button
-							type="button"
-							onClick={() => setTab("chat")}
-							className="flex-none rounded-full bg-warn/15 px-2 py-0.5 text-[11.5px] font-medium text-warn hover:bg-warn/25"
-						>
-							Needs you
-						</button>
-					)}
-					{thread?.stream === "error" && (
-						<span title={thread.error} className="flex-none rounded-full bg-warn/15 px-2 py-0.5 text-[11px] font-medium text-warn">
-							Reconnecting
-						</span>
-					)}
 				</div>
 				<nav aria-label="Vos pages" className="flex items-center gap-0.5 rounded-xl border bg-card/60 p-0.5">
 					{tabs.map((t) => (

@@ -33,7 +33,7 @@ import {
 } from "../../state/vos.ts";
 import { Button } from "../ui/button.tsx";
 import { Icon } from "../ui/icon.tsx";
-import { threadTimeline } from "../../state/vos-timeline.ts";
+import { taskIsLive, threadTimeline } from "../../state/vos-timeline.ts";
 import { VosAvatar, VosText } from "./parts.tsx";
 
 /** Re-render every second while mounted: the live line's timer. */
@@ -56,6 +56,36 @@ const STATUS_TEXT: Record<Task["status"], string> = {
 	cancelled: "Stopped",
 };
 
+/** A short ring around a card the user was just sent to, in a theme colour (a CSS variable's name). */
+function flash(el: HTMLElement, color = "--ring"): void {
+	const ring = getComputedStyle(el).getPropertyValue(color).trim() || "currentColor";
+	el.animate([{ boxShadow: `0 0 0 2px ${ring}` }, { boxShadow: "0 0 0 2px transparent" }], {
+		duration: 1600,
+		easing: "ease-in",
+	});
+}
+
+/**
+ * Bring what the vos is waiting on into view (the newest pending approval, secret, question or
+ * waiting task) and ring it. Called by the header's "Needs you", which may first switch to the chat.
+ */
+export function revealNeedsYou(): void {
+	// Two frames: the chat may only now be mounting, and it pins itself to the bottom as it does.
+	requestAnimationFrame(() =>
+		requestAnimationFrame(() => {
+			const pending = document.querySelectorAll<HTMLElement>("[data-vos-needs]");
+			const target = pending[pending.length - 1];
+			if (!target) {
+				const scroller = document.querySelector<HTMLElement>("[data-vos-scroller]");
+				scroller?.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+				return;
+			}
+			target.scrollIntoView({ behavior: "smooth", block: "center" });
+			flash(target, "--warn");
+		}),
+	);
+}
+
 function TaskCard({ task }: { task: Task }) {
 	const running = task.status === "inProgress" || task.status === "waiting";
 	// Waiting is on the user: amber and still throughout, never the working spinner.
@@ -63,7 +93,11 @@ function TaskCard({ task }: { task: Task }) {
 	const now = useTick(running);
 	const plan = task.plan?.length ? task.plan : task.steps.map((s) => ({ text: s.text, status: s.done ? "done" : "doing" }));
 	return (
-		<div id={`vos-task-${task.id}`} className="mt-2 w-full max-w-[520px] overflow-hidden rounded-xl border bg-card/70">
+		<div
+			id={`vos-task-${task.id}`}
+			data-vos-needs={waiting || undefined}
+			className="mt-2 w-full max-w-[520px] overflow-hidden rounded-xl border bg-card/70"
+		>
 			<div className="flex items-center gap-2 px-3.5 pt-3 pb-2">
 				<span
 					className={cn(
@@ -109,15 +143,21 @@ function TaskCard({ task }: { task: Task }) {
 			{plan.length > 0 && (
 				<ol className="flex flex-col gap-1 px-3.5 pb-2.5">
 					{plan.map((step, i) => {
-						// Only a running task has a step in hand; a finished one's leftovers read as skipped.
+						// Only a running task has a step in hand; a finished one's leftovers read as skipped,
+						// except the step a failed task broke on, which says so.
 						const live = running && step.status === "doing";
+						const broke = task.status === "failed" && step.status === "doing";
 						return (
 							<li
 								// biome-ignore lint/suspicious/noArrayIndexKey: plan steps have no ids and never reorder
 								key={i}
 								className={cn(
 									"flex items-start gap-2 text-[13px] leading-snug",
-									step.status === "done" ? "text-muted-foreground" : live ? "text-foreground" : "text-faint",
+									step.status === "done" || broke
+										? "text-muted-foreground"
+										: live
+											? "text-foreground"
+											: "text-faint",
 								)}
 							>
 								<span className="mt-[3px] flex size-3.5 flex-none items-center justify-center">
@@ -125,6 +165,8 @@ function TaskCard({ task }: { task: Task }) {
 										<Icon name="check" className="text-ok [&>svg]:size-3.5" />
 									) : live ? (
 										<span className={cn("size-2 rounded-full", waiting ? "bg-warn" : "animate-pulse-soft bg-tint")} />
+									) : broke ? (
+										<Icon name="close" className="text-warn [&>svg]:size-3.5" />
 									) : (
 										<span className="size-2 rounded-full border border-faint" />
 									)}
@@ -181,7 +223,10 @@ function TaskResult({ text }: { text: string }) {
 function ApprovalCard({ dot, approval }: { dot: string; approval: Approval }) {
 	const pending = approval.state === "pending";
 	return (
-		<div className="mt-2 w-full max-w-[520px] rounded-xl border border-warn/35 bg-warn/[0.06] p-3.5">
+		<div
+			data-vos-needs={pending || undefined}
+			className="mt-2 w-full max-w-[520px] rounded-xl border border-warn/35 bg-warn/[0.06] p-3.5"
+		>
 			<div className="flex items-start justify-between gap-3">
 				<div className="min-w-0">
 					<div className="text-[13.5px] font-medium">{approval.title}</div>
@@ -248,6 +293,7 @@ function SecretCard({ request }: { request: SecretRequest | undefined }) {
 	};
 	return (
 		<form
+			data-vos-needs
 			className="mt-2 w-full max-w-[520px] rounded-xl border bg-card/70 p-3.5"
 			onSubmit={(event) => {
 				event.preventDefault();
@@ -431,7 +477,7 @@ function Choices({ dot, message, thread }: { dot: string; message: Message; thre
 	if (message.attachment?.type === "approval" && thread.approvals.has(message.attachment.id)) return null;
 	const isLast = thread.messages.at(-1)?.id === message.id;
 	return (
-		<div className="mt-2 flex flex-wrap gap-2">
+		<div data-vos-needs={isLast || undefined} className="mt-2 flex flex-wrap gap-2">
 			{message.choices.map((choice) => (
 				<Button
 					key={choice}
@@ -483,8 +529,9 @@ function MessageLink({ message }: { message: Message }) {
 				type="button"
 				onClick={() => {
 					const card = document.getElementById(`vos-task-${id}`);
-					card?.scrollIntoView({ behavior: "smooth", block: "center" });
-					card?.animate([{ outlineColor: "var(--ring)" }, { outlineColor: "transparent" }], { duration: 1200 });
+					if (!card) return;
+					card.scrollIntoView({ behavior: "smooth", block: "center" });
+					flash(card);
 				}}
 				className="mt-2 inline-flex items-center gap-1 text-[13px] font-medium text-tint-text hover:underline"
 			>
@@ -671,6 +718,7 @@ function Composer({ dot, busy, members }: { dot: string; busy: boolean; members:
 				/>
 				{busy && (
 					// Alone, Stop takes Send's filled disc; beside Send (while typing) it steps back to an outline.
+					// Its square is solid either way: a hollow one that small reads as a checkbox.
 					<Button
 						size="icon"
 						variant={text.trim() ? "outline" : "default"}
@@ -679,7 +727,7 @@ function Composer({ dot, busy, members }: { dot: string; busy: boolean; members:
 						aria-label="Stop"
 						onClick={() => void stopThread(dot)}
 					>
-						<Icon name="stop" className={cn("[&>svg]:size-3.5", !text.trim() && "[&_rect]:fill-current")} />
+						<Icon name="stop" className="[&>svg]:size-4 [&_rect]:fill-current" />
 					</Button>
 				)}
 				{(!busy || text.trim()) && (
@@ -710,26 +758,35 @@ export function VosChat({ dot }: { dot: string }) {
 	const members = group
 		? group.members.map((id) => roster?.dots.find((d) => d.id === id)).filter((d): d is RosterDot => !!d)
 		: [];
-	// A task left "in progress" by a server restart is not work happening now:
-	// only one that has said so lately (its heartbeat or live line) counts. Nor
-	// does one the vos has since talked past while idle (it stopped, or the card
-	// is stale): a real task sets a fresh live line on its next step.
-	const now = Date.now();
+	// Only a task that is really being worked on keeps Stop up: see taskIsLive.
 	const lastVosAt = Date.parse([...thread.messages].reverse().find((m) => m.role !== "you")?.date ?? "") || 0;
-	const running = [...thread.tasks.values()].some(
-		(t) =>
-			(t.status === "inProgress" || t.status === "waiting") &&
-			((t.heartbeat?.at ?? 0) > now - 90_000 || Date.parse(t.nowAt ?? "") > now - 5 * 60_000) &&
-			!(thread.status.mood === "idle" && lastVosAt > (Date.parse(t.nowAt ?? "") || 0)),
-	);
+	const live = { mood: thread.status.mood, lastVosAt };
+	const running = [...thread.tasks.values()].some((t) => taskIsLive(t, live));
 	const busy = isBusy(thread.status.mood) || running;
+	const working = busy && !running;
 
+	// Another thread opens at its newest message, wherever the last one was scrolled to.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on thread change only
+	useLayoutEffect(() => {
+		pinned.current = true;
+	}, [dot]);
 	const last = thread.messages.at(-1);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: follow new messages and task updates
+	// biome-ignore lint/correctness/useExhaustiveDependencies: follow new messages, a thread change and the working row
 	useLayoutEffect(() => {
 		const el = scroller.current;
 		if (el && pinned.current) el.scrollTop = el.scrollHeight;
-	}, [thread.messages.length, last?.id, thread.tasks, dot]);
+	}, [thread.messages.length, last?.id, dot, working]);
+	// A task card that grows a step or a live line, or an image that loads, keeps the bottom in view too.
+	useEffect(() => {
+		const el = scroller.current;
+		const content = el?.firstElementChild;
+		if (!el || !content) return;
+		const observer = new ResizeObserver(() => {
+			if (pinned.current) el.scrollTop = el.scrollHeight;
+		});
+		observer.observe(content);
+		return () => observer.disconnect();
+	}, []);
 
 	const timeline = threadTimeline(thread.messages, thread.tasks.values());
 
@@ -744,6 +801,7 @@ export function VosChat({ dot }: { dot: string }) {
 		<div className="flex min-h-0 flex-1 flex-col">
 			<div
 				ref={scroller}
+				data-vos-scroller
 				className="min-h-0 flex-1 overflow-y-auto"
 				onScroll={(event) => {
 					const el = event.currentTarget;
@@ -759,8 +817,9 @@ export function VosChat({ dot }: { dot: string }) {
 					)}
 					{timeline.map((item, i) => {
 						if (item.kind === "task") {
+							// mt-3 and the card's own mt-2: the 20px a new speaker gets.
 							return (
-								<div key={`task-${item.task.id}`} className="mt-4 flex gap-3">
+								<div key={`task-${item.task.id}`} className="mt-3 flex gap-3">
 									<div className="w-7 flex-none" />
 									<div className="min-w-0 flex-1">
 										<TaskCard task={item.task} />
@@ -780,7 +839,7 @@ export function VosChat({ dot }: { dot: string }) {
 							Date.parse(m.date) - Date.parse(prev.date) > 10 * 60_000;
 						return <MessageRow key={m.id} dot={dot} message={m} thread={thread} speaker={speaker} first={first} />;
 					})}
-					{busy && !running && (
+					{working && (
 						<div className="mt-4 flex items-center gap-3 text-[13px]">
 							{self && (
 								<VosAvatar
