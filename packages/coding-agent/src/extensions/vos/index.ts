@@ -3,6 +3,7 @@
 
 import { hostname } from "node:os";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../../core/extensions/types.ts";
+import { agentLine, isAgentNews, parseAgentArgs, sortAgents } from "./agents.ts";
 import { deviceName, groupDot, pollPairing, startPairing, VosClient, VosError } from "./client.ts";
 import { type ResolvedVosConfig, resolveVosConfig, SECRET_DEVICE, SECRET_KEY, saveVosUrl } from "./config.ts";
 import {
@@ -34,8 +35,10 @@ import { loadViewHtml } from "./view-html.ts";
  * panel:
  *
  *   /vos                        roster (by section) and unread counts
- *   /vos panel                  inbox, chats, memory and coding agents in an overlay
+ *   /vos panel                  inbox, cloud agents, chats, memory and coding agents in an overlay
  *   /vos inbox                  what needs you, across all vos
+ *   /vos agents                 cloud agents: each a VM on one repo, ending in a PR
+ *   /vos agent <repo> <task>    start a cloud agent (owner/name, @branch for the base)
  *   /vos chat <name> [message]  send to a vos or group chat and follow the reply; no message shows the latest
  *   /vos memory <name>          what a vos remembers about you
  *   /vos routines [name]        a vos's routines (main when no name)
@@ -52,8 +55,10 @@ import { loadViewHtml } from "./view-html.ts";
  */
 
 const SUBCOMMANDS = [
-	{ value: "panel", description: "Inbox, chats, memory and coding agents in an overlay" },
+	{ value: "panel", description: "Inbox, cloud agents, chats and memory in an overlay" },
 	{ value: "inbox", description: "What needs you, across all vos" },
+	{ value: "agents", description: "Cloud agents and their PRs" },
+	{ value: "agent", description: "Start a cloud agent: <owner/repo[@base]> <task>" },
 	{ value: "chat", description: "Send to a vos or group and follow the reply" },
 	{ value: "memory", description: "What a vos remembers about you" },
 	{ value: "routines", description: "A vos's routines" },
@@ -417,6 +422,34 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				return;
 			}
 
+			if (sub === "agents") {
+				const jobs = sortAgents(await client.agents({ state: "all" }));
+				const lines = ["## Cloud agents", ""];
+				if (jobs.length === 0) lines.push("None yet. `/vos agent <owner/repo> <task>` starts one.");
+				for (const job of jobs.slice(0, 15)) lines.push(`- ${agentLine(job)}${job.pr ? ` · ${job.pr.url}` : ""}`);
+				say(lines.join("\n"));
+				return;
+			}
+
+			if (sub === "agent") {
+				const parsed = parseAgentArgs(rest);
+				if (!parsed) {
+					ctx.ui.notify("Usage: /vos agent <owner/repo[@base]> <task>", "warning");
+					return;
+				}
+				try {
+					const job = await client.startAgent("main", parsed);
+					say(`Cloud agent queued on **${job.repo}** \`${job.branch}\`. \`/vos agents\` to follow it.`);
+				} catch (error) {
+					if (error instanceof VosError && error.installUrl) {
+						say(`${error.message} Install the GitHub App: ${error.installUrl}`);
+						return;
+					}
+					throw error;
+				}
+				return;
+			}
+
 			if (sub === "chat") {
 				const roster = await client.roster();
 				const { name, message } = splitNameAndMessage(roster, rest);
@@ -573,13 +606,13 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 			}
 
 			ctx.ui.notify(
-				`Unknown: /vos ${sub}. Try /vos, panel, inbox, chat, memory, routines, connectors, code, skills, rules, groups or connect.`,
+				`Unknown: /vos ${sub}. Try /vos, panel, inbox, agents, agent, chat, memory, routines, connectors, code, skills, rules, groups or connect.`,
 				"warning",
 			);
 		};
 
 		smolt.registerCommand("vos", {
-			description: "Your Vos teammates: roster, inbox, chat, memory, routines, connectors, coding agents",
+			description: "Your Vos teammates: roster, inbox, cloud agents, chat, memory, routines, connectors",
 			getArgumentCompletions: (prefix) => {
 				if (prefix.includes(" ")) return null;
 				const items = SUBCOMMANDS.filter((s) => s.value.startsWith(prefix)).map((s) => ({
@@ -651,6 +684,8 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				case "liveClose":
 					s.liveClose(text(p.dot));
 					return null;
+				case "agentLiveOpen":
+					return s.agentLiveOpen(text(p.id));
 				case "inboxRefresh":
 					s.pokeInbox(0);
 					return null;
@@ -678,6 +713,14 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 			vos().watchInbox(
 				(count) => smolt.setViewBadge(VIEW_ID, (count?.unread ?? count?.open) || undefined),
 				(item) => {
+					if (isAgentNews(item)) {
+						ctx.ui.notify(item.title, item.kind === "failed" ? "warning" : "info", {
+							native: true,
+							title: item.kind === "failed" ? "Cloud agent failed" : "Cloud agent done",
+							openView: VIEW_ID,
+						});
+						return;
+					}
 					void nameOf(item.vos).then((name) =>
 						ctx.ui.notify(`${name}: ${item.title}`, "info", {
 							native: true,

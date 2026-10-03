@@ -47,6 +47,9 @@ const PATHS: Record<string, string> = {
 	pin: `<path ${STROKE} d="M8 3.5h4l-.5 4 2.5 2.5H6L8.5 7.5zM10 10v6.5"/>`,
 	hide: `<path ${STROKE} d="M3 10s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><path ${STROKE} d="m4 4 12 12"/>`,
 	hand: `<path ${STROKE} d="M7 10V5.25a1.25 1.25 0 0 1 2.5 0V9.5m0-.5V4.25a1.25 1.25 0 0 1 2.5 0V9.5m0-.75V5.5a1.25 1.25 0 0 1 2.5 0v5.75A5.25 5.25 0 0 1 9.25 16.5 4.5 4.5 0 0 1 5.4 14.3L3.9 11.7a1.2 1.2 0 0 1 2-1.3L7 12"/>`,
+	cloud: `<path ${STROKE} d="M6 15.5h8.25a3.25 3.25 0 0 0 .4-6.48A4.75 4.75 0 0 0 5.6 8.6 3.5 3.5 0 0 0 6 15.5z"/>`,
+	external: `<path ${STROKE} d="M11 4h5v5M16 4l-7 7M14 11.5V15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3.5"/>`,
+	screen: `<rect ${STROKE} x="3" y="4" width="14" height="9.5" rx="1.75"/><path ${STROKE} d="M7.5 16.5h5M10 13.5v3"/>`,
 	spinner: `<circle ${STROKE} cx="10" cy="10" r="6.5" stroke-opacity="0.25"/><path ${STROKE} d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5"/>`,
 };
 

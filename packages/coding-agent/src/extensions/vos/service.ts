@@ -1,5 +1,6 @@
 import { hostname } from "node:os";
 import type { ExtensionSecrets } from "../../core/extensions/types.ts";
+import { isAgentNews } from "./agents.ts";
 import {
 	checkApiPath,
 	DEFAULT_VOS_URL,
@@ -107,15 +108,20 @@ export function isSecretAnswer(method: string, path: string): boolean {
 	return method === "POST" && /^\/secrets\/[^/?]+\/?(\?.*)?$/.test(path);
 }
 
-const failure = (error: unknown): { ok: false; error: string; status: number } => ({
+const failure = (error: unknown): { ok: false; error: string; status: number; installUrl?: string } => ({
 	ok: false,
 	error: error instanceof Error ? error.message : String(error),
 	status: error instanceof VosError ? error.status : 0,
+	...(error instanceof VosError && error.installUrl ? { installUrl: error.installUrl } : {}),
 });
 
+/** Worth a notification: it needs the user, or a cloud agent finished or failed. */
+const isNews = (item: InboxItem): boolean => (item.state === "open" && item.priority === "high") || isAgentNews(item);
+
 /**
- * New high-priority inbox items, to notify about. The first look only learns
- * what is already there: a backlog at startup is not news.
+ * New inbox items to notify about: high-priority ones, and cloud agents that
+ * finished or failed. The first look only learns what is already there: a
+ * backlog at startup is not news.
  */
 export class InboxTracker {
 	private seen = new Set<string>();
@@ -127,7 +133,7 @@ export class InboxTracker {
 		for (const item of items) {
 			if (this.seen.has(item.id)) continue;
 			this.seen.add(item.id);
-			if (this.primed && item.state === "open" && item.priority === "high") out.push(item);
+			if (this.primed && isNews(item)) out.push(item);
 		}
 		this.primed = true;
 		return out;
@@ -137,7 +143,7 @@ export class InboxTracker {
 	added(item: InboxItem): boolean {
 		if (!item?.id || this.seen.has(item.id)) return false;
 		this.seen.add(item.id);
-		return item.state === "open" && item.priority === "high";
+		return isNews(item);
 	}
 
 	reset(): void {
@@ -585,6 +591,15 @@ export class VosService {
 	 * is told and falls back to the /screens snapshots.
 	 */
 	async liveOpen(dot: string): Promise<VosCallResult> {
+		return this.openLive(dot, "/computer/live", { "x-vos-dot": dot });
+	}
+
+	/** A cloud agent's VM, live, when the server offers it; frames go out as `agent:<id>`. */
+	async agentLiveOpen(id: string): Promise<VosCallResult> {
+		return this.openLive(`agent:${id}`, `/agents/${encodeURIComponent(id)}/live`, {});
+	}
+
+	private async openLive(dot: string, path: string, headers: Record<string, string>): Promise<VosCallResult> {
 		await this.ready();
 		this.sweep();
 		const open = this.lives.get(dot);
@@ -596,10 +611,10 @@ export class VosService {
 		if (!client) return { ok: false, error: "Vos is not connected.", status: 0 };
 		const factory = this.socket ?? defaultSocketFactory();
 		if (!factory) return { ok: false, error: "This build has no WebSocket client.", status: 0 };
-		const url = `${client.baseUrl.replace(/^http/, "ws")}/v1/computer/live`;
+		const url = `${client.baseUrl.replace(/^http/, "ws")}/v1${path}`;
 		let socket: LiveSocket;
 		try {
-			socket = factory(url, { authorization: `Bearer ${this.key}`, "x-vos-dot": dot });
+			socket = factory(url, { authorization: `Bearer ${this.key}`, ...headers });
 		} catch (error) {
 			return failure(error);
 		}

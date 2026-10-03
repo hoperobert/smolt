@@ -1,6 +1,6 @@
 import { ago, inboxKindLabel, sortInbox } from "../../format.ts";
 import type { InboxItem } from "../../types.ts";
-import { nameOf, openVos, setInboxAll, settleInboxItem, takeover, useVos } from "../store.ts";
+import { nameOf, openAgents, openVos, setInboxAll, settleInboxItem, takeover, useVos } from "../store.ts";
 import { Button, cn, Icon } from "../ui.tsx";
 import { Empty, PageHeader, Segmented, VosAvatar } from "./parts.tsx";
 
@@ -23,6 +23,10 @@ const PRIORITY_TONE: Record<InboxItem["priority"], string> = {
 
 /** Go to what the item is about: the chat (where approvals, secrets and questions are answered) or the takeover. */
 function jump(item: InboxItem): void {
+	if (item.ref?.type === "agent") {
+		openAgents(item.ref.id);
+		return;
+	}
 	if (item.kind === "handoff") {
 		openVos(item.vos, "chat");
 		void takeover(item.vos, true);

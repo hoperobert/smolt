@@ -18,6 +18,7 @@ import {
 } from "../store.ts";
 import { cn, Icon, Menu, MenuItem, MenuSeparator } from "../ui.tsx";
 import { VosAvatar } from "./parts.tsx";
+import { VosAgents } from "./VosAgents.tsx";
 import { revealNeedsYou, VosChat } from "./VosChat.tsx";
 import { VosComputers } from "./VosComputers.tsx";
 import { VosConnect } from "./VosConnect.tsx";
@@ -307,6 +308,11 @@ export function VosView() {
 				<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
 					<Notice />
 					<VosInbox />
+				</div>
+			) : v.page === "agents" ? (
+				<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto" data-vos-page="agents">
+					<Notice />
+					<VosAgents />
 				</div>
 			) : (
 				<Thread />

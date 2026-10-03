@@ -9,7 +9,12 @@
  * a few vos, a group chat, routines, skills, auto-review rules, a pending
  * secret request, share links, Teach a task, the screens gallery, the SSE
  * stream at /v1/events and a minimal /v1/computer/live WebSocket that sends
- * generated PNG frames. Sending a message makes the vos "work" on a task for
+ * generated PNG frames, and cloud agents (/v1/agents, /v1/github): a job runs
+ * through its states in about ten seconds and opens a PR (say "fail" in the
+ * task and its tests fail). MOCK_VOS_GITHUB=off shows the GitHub setup card;
+ * MOCK_VOS_SPEED=10 runs jobs ten times faster (tests).
+ *
+ * Sending a message makes the vos "work" on a task for
  * a few seconds (steps, the live "now" line) and answer; say "slowly" in it
  * and the vos thinks for 25 s first, with no task card yet.
  *
@@ -452,6 +457,124 @@ function work(threadId, text) {
 		setStatus(threadId, "idle", "");
 		running.delete(threadId);
 	});
+}
+
+// ---------------------------------------------------------------- cloud agents
+
+const GITHUB_OFF = process.env.MOCK_VOS_GITHUB === "off";
+const SPEED = Number(process.env.MOCK_VOS_SPEED) || 1;
+const INSTALL_URL = "https://github.com/apps/vos-agents/installations/new";
+const githubRepos = ["hoperobert/smolt", "acme/site", "acme/api"];
+const agentJobs = new Map();
+/** Log lines by job id, and the timers of jobs still moving. */
+const agentLogs = new Map();
+const agentTimers = new Map();
+const agentLine = (stream, text, at = now()) => ({ at, stream, text });
+
+function agentLog(job, stream, text) {
+	const line = agentLine(stream, text);
+	agentLogs.get(job.id).push(line);
+	emit(job.vos, "agent.log", { id: job.id, line });
+}
+function agentUpdate(job, patch) {
+	Object.assign(job, patch);
+	emit(job.vos, "agent.updated", { job });
+}
+function agentInbox(job) {
+	const failed = job.state === "failed";
+	const item = { id: `i-${uuid()}`, vos: job.vos, kind: failed ? "failed" : "done", title: failed ? `Agent failed on ${job.repo}` : `PR ready on ${job.repo}`, detail: failed ? job.error : job.summary, priority: failed ? "normal" : "low", state: "open", ref: { type: "agent", id: job.id }, date: now() };
+	inbox.set(item.id, item);
+	emit(job.vos, "inbox.added", { item });
+}
+
+/** Run a job through its states: VM, edits, tests, push, PR, checks. */
+function simulateAgent(job) {
+	const timers = [];
+	agentTimers.set(job.id, timers);
+	const fails = /\bfail/i.test(job.task);
+	const at = (ms, fn) => timers.push(setTimeout(fn, ms / SPEED));
+	at(600, () => {
+		agentUpdate(job, { state: "provisioning", step: "Cloning the template VM", startedAt: now(), vm: { id: String(9000 + Math.floor(Math.random() * 900)), node: "hope-2", name: `vos-agent-${job.id}` } });
+		agentLog(job, "system", `VM ${job.vm.name} on ${job.vm.node}`);
+	});
+	at(2000, () => {
+		agentUpdate(job, { state: "running", step: "Reading AGENTS.md" });
+		agentLog(job, "shell", `git clone https://github.com/${job.repo} && git checkout -b ${job.branch}`);
+		agentLog(job, "tool", "read AGENTS.md");
+	});
+	at(3200, () => {
+		agentUpdate(job, { step: "Editing files" });
+		agentLog(job, "agent", "The test races the session flush; awaiting it before the assert.");
+		agentLog(job, "tool", "edit test/session.test.ts (+4 -1)");
+	});
+	at(4600, () => {
+		agentUpdate(job, { state: "testing", step: "Running npm test" });
+		agentLog(job, "shell", "npm test");
+		agentLog(job, "shell", fails ? "3 failing (auth.spec.ts)" : "412 passing (38s)");
+	});
+	if (fails) {
+		at(6000, () => {
+			agentUpdate(job, { state: "failed", step: undefined, error: "Tests fail: 3 in auth.spec.ts.", finishedAt: now(), vm: null, costSeconds: Math.round(6 / SPEED) });
+			agentLog(job, "system", "Gave up after 2 tries. VM deleted.");
+			agentInbox(job);
+			agentTimers.delete(job.id);
+		});
+		return;
+	}
+	at(6000, () => {
+		agentUpdate(job, { state: "pushing", step: `Pushing ${job.branch}` });
+		agentLog(job, "shell", `git push origin ${job.branch}`);
+	});
+	at(7200, () => {
+		const number = 100 + Math.floor(Math.random() * 400);
+		agentUpdate(job, { state: "done", step: undefined, summary: "Changes pushed; tests pass.", finishedAt: now(), vm: null, costSeconds: Math.round(7 / SPEED), pr: { number, url: `https://github.com/${job.repo}/pull/${number}`, title: job.task.slice(0, 60), checks: "pending" } });
+		agentLog(job, "system", `Opened PR #${number}. VM deleted.`);
+		agentInbox(job);
+	});
+	at(10_000, () => {
+		agentUpdate(job, { pr: { ...job.pr, checks: "passing" } });
+		agentTimers.delete(job.id);
+	});
+}
+
+function newAgentJob(vos, repo, task, base) {
+	const slug = task.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "task";
+	const job = { id: `ag-${uuid()}`, vos, repo, base: base || "main", branch: `vos/${slug}-${uuid().slice(0, 4)}`, task, state: "queued", step: "Waiting for a VM", vm: null, pr: null, approvals: [], createdAt: now() };
+	agentJobs.set(job.id, job);
+	agentLogs.set(job.id, [agentLine("system", "Queued")]);
+	return job;
+}
+
+{
+	// A job that never ends (its log keeps growing), one done with a passing PR, one failed, one waiting on you.
+	const live = { id: "ag-live", vos: "rex", repo: "hoperobert/smolt", base: "develop", branch: "vos/fix-flaky-session-test-a1b2", task: "Fix the flaky session test in packages/coding-agent", state: "running", step: "Running npm test", vm: { id: "9112", node: "hope-2", name: "vos-agent-ag-live" }, pr: null, approvals: [], createdAt: minutesAgo(7), startedAt: minutesAgo(6.5) };
+	const logLines = [
+		["system", "VM vos-agent-ag-live on hope-2"],
+		["shell", "git clone https://github.com/hoperobert/smolt && git checkout -b vos/fix-flaky-session-test-a1b2"],
+		["tool", "read AGENTS.md"],
+		["agent", "The flake is a race: the test asserts before the session file is flushed."],
+		["tool", "read packages/coding-agent/test/session.test.ts"],
+		["tool", "edit packages/coding-agent/test/session.test.ts (+4 -1)"],
+		["shell", "npm ci"],
+		["shell", "added 812 packages in 21s"],
+		["shell", "npm run check"],
+		["shell", "Checked 1204 files in 2s. No fixes applied."],
+		["shell", "node vitest --run test/session.test.ts"],
+	];
+	agentJobs.set(live.id, live);
+	agentLogs.set(live.id, logLines.map(([stream, text], i) => agentLine(stream, text, minutesAgo(6.5 - i * 0.5))));
+	const cycle = ["✓ session.test.ts > saves on exit (12ms)", "✓ session.test.ts > reloads after crash (40ms)", "✓ session.test.ts > flushes before compaction (8ms)", "run 3/20: green"];
+	let n = 0;
+	setInterval(() => agentLog(live, "shell", cycle[n++ % cycle.length]), 2500).unref();
+
+	const done = { id: "ag-done", vos: "main", repo: "acme/site", base: "main", branch: "vos/dark-mode-toggle-9f3c", task: "Add a dark mode toggle to the header", state: "done", vm: null, pr: { number: 42, url: "https://github.com/acme/site/pull/42", title: "Add a dark mode toggle to the header", checks: "passing" }, summary: "Toggle in the header, saved per user; 3 tests added.", approvals: [], createdAt: minutesAgo(95), startedAt: minutesAgo(94), finishedAt: minutesAgo(71), costSeconds: 1380 };
+	const failed = { id: "ag-failed", vos: "ada", repo: "acme/api", base: "main", branch: "vos/rate-limit-login-77d0", task: "Rate-limit the login endpoint", state: "failed", vm: null, pr: { number: 17, url: "https://github.com/acme/api/pull/17", title: "Rate-limit the login endpoint", checks: "failing" }, error: "CI still failing after 2 rounds: auth.spec.ts.", approvals: [], createdAt: minutesAgo(300), startedAt: minutesAgo(299), finishedAt: minutesAgo(262), costSeconds: 2220 };
+	const waiting = { id: "ag-wait", vos: "main", repo: "acme/site", base: "main", branch: "vos/bump-deps-0c1e", task: "Bump dependencies and publish the UI kit", state: "waiting", step: "Waiting for approval: npm publish", vm: { id: "9120", node: "hope-1", name: "vos-agent-ag-wait" }, pr: null, approvals: ["ap-agent-1"], createdAt: minutesAgo(18), startedAt: minutesAgo(17) };
+	for (const job of [done, failed, waiting]) {
+		agentJobs.set(job.id, job);
+		agentLogs.set(job.id, [agentLine("system", `VM ${job.id}`, job.startedAt), agentLine("agent", job.summary ?? job.error ?? job.step ?? "", job.finishedAt ?? now())]);
+	}
+	inbox.set("i-ag-done", { id: "i-ag-done", vos: "main", kind: "done", title: "PR ready on acme/site", detail: done.summary, priority: "low", state: "open", ref: { type: "agent", id: done.id }, date: done.finishedAt });
 }
 
 // ---------------------------------------------------------------- http
@@ -976,6 +1099,58 @@ const server = http.createServer(async (req, res) => {
 		return json(res, 201, task);
 	}
 
+	// cloud agents
+	if (p === "/github" && method === "GET") return json(res, 200, GITHUB_OFF ? { configured: false, installUrl: INSTALL_URL, repos: [] } : { configured: true, appSlug: "vos-agents", installUrl: INSTALL_URL, repos: githubRepos });
+	if (p === "/agents" && method === "GET") {
+		const active = url.searchParams.get("state") === "active";
+		const only = url.searchParams.get("vos");
+		const list = [...agentJobs.values()].filter((j) => (!active || !["done", "failed", "cancelled"].includes(j.state)) && (!only || j.vos === only));
+		return json(res, 200, list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+	}
+	if (p === "/agents" && method === "POST") {
+		const repo = String(body.repo ?? "").trim();
+		const task = String(body.task ?? "").trim();
+		if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return json(res, 400, { error: "repo is owner/name" });
+		if (!task) return json(res, 400, { error: "Say what to do." });
+		if (GITHUB_OFF || !githubRepos.includes(repo)) return json(res, 409, { error: `The GitHub app isn't installed on ${repo}.`, installUrl: INSTALL_URL });
+		const job = newAgentJob(vosId, repo, task, body.base);
+		simulateAgent(job);
+		emit(job.vos, "agent.updated", { job });
+		return json(res, 201, job);
+	}
+	if (seg[0] === "agents" && seg[1]) {
+		const job = agentJobs.get(seg[1]);
+		if (!job) return json(res, 404, { error: "No such job" });
+		const finished = ["done", "failed", "cancelled"].includes(job.state);
+		if (!seg[2] && method === "GET") return json(res, 200, job);
+		if (seg[2] === "log" && method === "GET") {
+			const lines = agentLogs.get(job.id) ?? [];
+			const after = Math.max(0, Number(url.searchParams.get("after")) || 0);
+			return json(res, 200, { lines: lines.slice(after), next: lines.length });
+		}
+		if (seg[2] === "message" && method === "POST") {
+			if (finished) return json(res, 409, { error: `Already ${job.state}.` });
+			if (!String(body.text ?? "").trim()) return json(res, 400, { error: "Say something." });
+			agentLog(job, "system", `Follow-up: ${String(body.text).trim()}`);
+			setTimeout(() => agentLog(job, "agent", "Got it, adjusting."), 600 / SPEED);
+			return json(res, 200, { ok: true });
+		}
+		if (seg[2] === "cancel" && method === "POST") {
+			if (finished) return json(res, 409, { error: `Already ${job.state}.` });
+			for (const timer of agentTimers.get(job.id) ?? []) clearTimeout(timer);
+			agentTimers.delete(job.id);
+			agentUpdate(job, { state: "cancelled", step: undefined, finishedAt: now(), vm: null });
+			agentLog(job, "system", "Cancelled. VM deleted.");
+			return json(res, 200, job);
+		}
+		if (seg[2] === "retry" && method === "POST") {
+			const next = newAgentJob(job.vos, job.repo, job.task, job.base);
+			simulateAgent(next);
+			emit(next.vos, "agent.updated", { job: next });
+			return json(res, 201, next);
+		}
+	}
+
 	// computers
 	if (p === "/screens") {
 		const tick = Math.floor(Date.now() / 1000);
@@ -1000,7 +1175,8 @@ function wsFrame(payload, opcode) {
 
 server.on("upgrade", (req, socket) => {
 	const url = new URL(req.url ?? "/", BASE);
-	if (url.pathname !== "/v1/computer/live" || !authorised(req.headers.authorization)) {
+	const agentLive = /^\/v1\/agents\/[^/]+\/live$/.test(url.pathname);
+	if ((url.pathname !== "/v1/computer/live" && !agentLive) || !authorised(req.headers.authorization)) {
 		socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
 		return;
 	}

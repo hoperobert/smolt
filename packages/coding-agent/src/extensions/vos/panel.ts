@@ -16,17 +16,27 @@ import type { KeybindingsManager } from "../../core/keybindings.ts";
 import { DynamicBorder } from "../../modes/interactive/components/dynamic-border.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { groupDot, type VosClient } from "./client.ts";
+import {
+	agentDuration,
+	agentStateLabel,
+	checksLabel,
+	isAgentActive,
+	parseAgentArgs,
+	parseRepo,
+	sortAgents,
+} from "./agents.ts";
+import { groupDot, type VosClient, VosError } from "./client.ts";
 import { ago, inboxKindLabel, moodLabel, rosterSections, sortInbox } from "./format.ts";
-import { FACE_ID_KINDS, type InboxItem, type Message, type Roster } from "./types.ts";
+import { type AgentJob, FACE_ID_KINDS, type InboxItem, type Message, type Roster } from "./types.ts";
 
 /**
  * /vos panel: the Vos view's essentials in the terminal, as an overlay.
  *
  * Every screen is a list (the terminal's own select keys move and pick), so
  * nothing here binds a key of its own: the inbox and what to do with an item,
- * each vos's latest messages, sending one, its memory, and starting a coding
- * agent. The live computer and the editors stay in the desktop app.
+ * each vos's latest messages, sending one, its memory, cloud agents (list,
+ * log, message, cancel, retry, start), and starting a coding agent. The live
+ * computer and the editors stay in the desktop app.
  */
 
 function selectTheme(theme: Theme) {
@@ -54,10 +64,15 @@ function frame(theme: Theme, title: string, body: Component[], footer?: string):
 
 const BACK = "\0back";
 
-/** The menu rows of the home screen: the inbox, then each vos by section, then groups. */
-export function homeItems(roster: Roster, open: number): SelectItem[] {
+/** The menu rows of the home screen: the inbox, cloud agents, then each vos by section, then groups. */
+export function homeItems(roster: Roster, open: number, running = 0): SelectItem[] {
 	const items: SelectItem[] = [
 		{ value: "inbox", label: `Inbox${open ? ` (${open} open)` : ""}`, description: "What needs you, across all vos" },
+		{
+			value: "agents",
+			label: `Cloud agents${running ? ` (${running} running)` : ""}`,
+			description: "A VM per task, ending in a PR",
+		},
 	];
 	for (const section of rosterSections(roster.dots)) {
 		for (const d of section.dots) {
@@ -98,7 +113,20 @@ export function inboxActions(item: InboxItem, faceId = false): SelectItem[] {
 	if (item.state === "open") {
 		actions.push({ value: "done", label: "Mark done" }, { value: "dismiss", label: "Dismiss" });
 	}
+	if (item.ref?.type === "agent") actions.push({ value: `agent:${item.ref.id}`, label: "Open the job" });
 	actions.push({ value: `vos:${item.vos}`, label: "Open its chat" }, { value: BACK, label: "Back" });
+	return actions;
+}
+
+/** What can be done with one cloud agent job from the terminal. */
+export function agentActions(job: AgentJob): SelectItem[] {
+	const actions: SelectItem[] = [{ value: "log", label: "Log" }];
+	if (isAgentActive(job.state)) {
+		actions.push({ value: "message", label: "Message…" }, { value: "cancel", label: "Cancel" });
+	} else {
+		actions.push({ value: "retry", label: "Retry" });
+	}
+	actions.push({ value: "refresh", label: "Refresh" }, { value: BACK, label: "Back" });
 	return actions;
 }
 
@@ -113,6 +141,7 @@ class VosPanel implements Component, Focusable {
 	private target: Focusable | undefined;
 	private roster: Roster = { dots: [], groups: [] };
 	private inbox: InboxItem[] = [];
+	private agents: AgentJob[] = [];
 	private _focused = false;
 
 	constructor(tui: TUI, theme: Theme, keybindings: KeybindingsManager, client: VosClient, close: () => void) {
@@ -193,12 +222,14 @@ class VosPanel implements Component, Focusable {
 
 	async home(): Promise<void> {
 		try {
-			const [roster, inbox] = await Promise.all([
+			const [roster, inbox, agents] = await Promise.all([
 				this.client.roster(),
 				this.client.inbox({ state: "open" }).catch(() => [] as InboxItem[]),
+				this.client.agents({ state: "all" }).catch(() => [] as AgentJob[]),
 			]);
 			this.roster = roster;
 			this.inbox = sortInbox(inbox);
+			this.agents = sortAgents(agents);
 		} catch (error) {
 			this.note("Vos", error instanceof Error ? error.message : String(error));
 			return;
@@ -206,9 +237,10 @@ class VosPanel implements Component, Focusable {
 		this.list(
 			"Vos",
 			[],
-			homeItems(this.roster, this.inbox.length),
+			homeItems(this.roster, this.inbox.length, this.agents.filter((j) => isAgentActive(j.state)).length),
 			(value) => {
 				if (value === "inbox") this.showInbox();
+				else if (value === "agents") this.showAgents();
 				else this.showThread(value.startsWith("vos:") ? value.slice(4) : groupDot(value.slice(6)));
 			},
 			this.close,
@@ -264,6 +296,10 @@ class VosPanel implements Component, Focusable {
 				await this.showThread(action.slice(4));
 				return;
 			}
+			if (action.startsWith("agent:")) {
+				await this.showAgent(action.slice(6), () => this.showInbox());
+				return;
+			}
 			if (action.startsWith("approve:") && item.ref) {
 				const remember = action.slice("approve:".length) as "once" | "1h" | "today";
 				await this.client.answerApproval(item.vos, item.ref.id, "approve", remember);
@@ -276,6 +312,128 @@ class VosPanel implements Component, Focusable {
 			}
 			this.inbox = sortInbox(await this.client.inbox({ state: "open" }).catch(() => this.inbox));
 			this.showInbox();
+		} catch (error) {
+			this.fail(error);
+		}
+	}
+
+	// ---------------------------------------------------------------- cloud agents
+
+	private showAgents(): void {
+		const items: SelectItem[] = [
+			{ value: "start", label: "Start a cloud agent…", description: "owner/repo[@base] then the task" },
+			...this.agents.slice(0, 30).map((job) => ({
+				value: job.id,
+				label: `${agentStateLabel(job.state)}: ${job.repo}`,
+				description: [
+					isAgentActive(job.state) ? job.step : (job.error ?? job.summary),
+					job.pr
+						? `PR #${job.pr.number}${job.pr.checks ? ` ${checksLabel(job.pr.checks).toLowerCase()}` : ""}`
+						: "",
+					agentDuration(job),
+				]
+					.filter(Boolean)
+					.join(" · "),
+			})),
+			{ value: BACK, label: "Back" },
+		];
+		this.list(
+			"Cloud agents",
+			[],
+			items,
+			(value) => {
+				if (value === "start") this.startAgent();
+				else void this.showAgent(value, () => this.showAgents());
+			},
+			() => void this.home(),
+		);
+	}
+
+	private startAgent(): void {
+		this.ask("Cloud agent: repo", "owner/name, @branch for a base other than the default", (repoText) => {
+			if (!repoText) return this.showAgents();
+			const [repoPart = ""] = repoText.split(/\s+/);
+			if (!parseRepo(repoPart.split("@")[0] ?? "")) {
+				this.note("Cloud agents", "That is not owner/name.");
+				setTimeout(() => this.startAgent(), 1500);
+				return;
+			}
+			this.ask(`Task for ${repoPart}`, "What should it do? It ends in a PR.", (task) => {
+				const parsed = task ? parseAgentArgs(`${repoPart} ${task}`) : undefined;
+				if (!parsed) return this.showAgents();
+				void this.client.startAgent("main", parsed).then(
+					async (job) => {
+						this.agents = sortAgents([job, ...this.agents.filter((j) => j.id !== job.id)]);
+						await this.showAgent(job.id, () => this.showAgents());
+					},
+					(error: unknown) => {
+						const install = error instanceof VosError && error.installUrl ? ` Install: ${error.installUrl}` : "";
+						this.note("Cloud agents", `${error instanceof Error ? error.message : String(error)}${install}`);
+						setTimeout(() => this.showAgents(), 3000);
+					},
+				);
+			});
+		});
+	}
+
+	private async showAgent(id: string, back: () => void, log?: string[]): Promise<void> {
+		let job: AgentJob;
+		try {
+			const known = this.agents.find((j) => j.id === id);
+			job = await this.client.agent(id, known?.vos);
+			this.agents = sortAgents([job, ...this.agents.filter((j) => j.id !== id)]);
+		} catch (error) {
+			this.fail(error);
+			return;
+		}
+		const muted = (text: string) => new Text(this.theme.fg("muted", text), 1, 0);
+		const body: Component[] = [
+			muted(`${agentStateLabel(job.state)} · ${job.branch} · ${agentDuration(job)}`),
+			new Text(job.task.replace(/\s+/g, " "), 1, 0),
+		];
+		if (isAgentActive(job.state) && job.step) body.push(muted(job.step));
+		if (job.summary) body.push(new Text(job.summary, 1, 0));
+		if (job.error) body.push(new Text(this.theme.fg("error", job.error), 1, 0));
+		if (job.pr) {
+			body.push(
+				new Text(
+					`PR #${job.pr.number}${job.pr.checks ? ` · ${checksLabel(job.pr.checks)}` : ""}: ${this.theme.fg("accent", job.pr.url)}`,
+					1,
+					0,
+				),
+			);
+		}
+		if (log) {
+			body.push(new Spacer(1));
+			body.push(...(log.length ? log : ["(empty)"]).map((line) => new Text(this.theme.fg("dim", line), 1, 0)));
+		}
+		this.list(`${job.repo}`, body, agentActions(job), (action) => void this.agentAct(job, action, back), back);
+	}
+
+	private async agentAct(job: AgentJob, action: string, back: () => void): Promise<void> {
+		const again = (log?: string[]) => this.showAgent(job.id, back, log);
+		try {
+			if (action === "log") {
+				const { lines } = await this.client.agentLog(job.id, 0, job.vos);
+				await again(lines.slice(-14).map((l) => l.text.replace(/\s+/g, " ").slice(0, 200)));
+			} else if (action === "message") {
+				this.ask("Message the agent", "A follow-up instruction; it reads it between steps.", (text) => {
+					if (!text) return void again();
+					void this.client.messageAgent(job.id, text, job.vos).then(
+						() => again(),
+						(error: unknown) => this.fail(error),
+					);
+				});
+			} else if (action === "cancel") {
+				await this.client.cancelAgent(job.id, job.vos);
+				await again();
+			} else if (action === "retry") {
+				const next = await this.client.retryAgent(job.id, job.vos);
+				this.agents = sortAgents([next, ...this.agents]);
+				await this.showAgent(next.id, back);
+			} else {
+				await again();
+			}
 		} catch (error) {
 			this.fail(error);
 		}

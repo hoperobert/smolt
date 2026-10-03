@@ -17,8 +17,13 @@ event stream (SSE) and live-computer socket. Events come back with
 
 Pages: roster with sections, pins and hidden vos (pin, hide, file under a
 section and duplicate from a row's menu); the inbox across all vos (triage,
-done/dismiss, jump to the approval, secret or task), with the open count on
-the sidebar badge and a native notification for each new high-priority item;
+done/dismiss, jump to the approval, secret, task or cloud agent), with the open
+count on the sidebar badge and a native notification for each new
+high-priority item and each cloud agent that finishes or fails; cloud agents
+(jobs that run smolt in a fresh VM on one repo and end in a PR: list, start
+form with a repo picker from the GitHub App, live log, follow-up message,
+cancel, retry, the PR and its checks, the VM's screen when offered, and a
+setup card when the GitHub App is not installed);
 per vos: chat (approvals answered once, for an hour, today or always; secret
 requests; group chats with @-mentions and handoffs; taking over the computer
 when a vos hands off, then handing back), routines (schedules and event
@@ -42,8 +47,10 @@ node packages/coding-agent/src/extensions/vos/view/mock-vos.mjs
 | Command | What it does |
 | --- | --- |
 | `/vos` | Roster by section: each vos's mood, label and unread count, group chats, hidden vos |
-| `/vos panel` | An overlay: the inbox (approve once / 1 hour / today, deny, done, dismiss), each vos's latest messages, sending one, its memory, starting a coding agent |
+| `/vos panel` | An overlay: the inbox (approve once / 1 hour / today, deny, done, dismiss), cloud agents (start, log, message, cancel, retry), each vos's latest messages, sending one, its memory, starting a coding agent |
 | `/vos inbox` | What needs you, across all vos |
+| `/vos agents` | Cloud agents: state, repo, branch, PR and checks, duration |
+| `/vos agent <owner/repo[@base]> <task>` | Starts a cloud agent (owned by main); without the GitHub App on the repo it says where to install it |
 | `/vos chat <name> [message]` | Sends to a vos or group chat (names with spaces work) and follows the reply as it streams in; with no message, shows the latest |
 | `/vos memory <name>` | What a vos remembers |
 | `/vos routines [name]` | A vos's routines and triggers (main when no name) |

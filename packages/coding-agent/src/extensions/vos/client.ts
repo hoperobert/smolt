@@ -1,9 +1,12 @@
 import { SseParser } from "./sse.ts";
 import type {
+	AgentJob,
+	AgentLogLine,
 	Approval,
 	ApprovalRemember,
 	ComputerState,
 	Dot,
+	GithubStatus,
 	Group,
 	InboxCount,
 	InboxItem,
@@ -43,10 +46,13 @@ export const DEFAULT_VOS_URL = "https://vos-api.vosgrau.com";
 
 export class VosError extends Error {
 	readonly status: number;
-	constructor(message: string, status: number) {
+	/** Where to install the GitHub App, when a cloud agent could not start for lack of it. */
+	readonly installUrl: string | undefined;
+	constructor(message: string, status: number, installUrl?: string) {
 		super(message);
 		this.name = "VosError";
 		this.status = status;
+		this.installUrl = installUrl;
 	}
 }
 
@@ -164,6 +170,12 @@ export type SkillInput = Partial<Omit<Skill, "id" | "createdAt" | "updatedAt" | 
 export type RuleInput = Omit<Rule, "id" | "createdAt" | "source">;
 /** A rule edit; null clears `match` or `vos`. */
 export type RulePatch = Partial<Omit<RuleInput, "match" | "vos">> & { match?: string | null; vos?: string | null };
+export interface AgentInput {
+	repo: string;
+	task: string;
+	base?: string;
+	keepVm?: boolean;
+}
 export type DotPatch = Partial<
 	Pick<Dot, "name" | "label" | "personality" | "job" | "rules" | "look" | "pinned" | "hidden" | "section">
 >;
@@ -244,13 +256,18 @@ export class VosClient {
 			value = undefined;
 		}
 		if (!response.ok) {
+			const body = (value && typeof value === "object" ? value : {}) as { error?: unknown; installUrl?: unknown };
 			const message =
-				value && typeof value === "object" && typeof (value as { error?: unknown }).error === "string"
-					? (value as { error: string }).error
+				typeof body.error === "string"
+					? body.error
 					: response.status === 401
 						? "The Vos server did not accept the API key."
 						: `The Vos server answered ${response.status}.`;
-			throw new VosError(message, response.status);
+			throw new VosError(
+				message,
+				response.status,
+				typeof body.installUrl === "string" && /^https?:\/\//.test(body.installUrl) ? body.installUrl : undefined,
+			);
 		}
 		return value as T;
 	}
@@ -408,6 +425,52 @@ export class VosClient {
 	/** The vos starts a coding agent on its computer; it runs as a task like any other. */
 	startCoding(dot: string, task: string, repo?: string): Promise<Task> {
 		return this.request("POST", "/code", { dot, body: { task, ...(repo ? { repo } : {}) } });
+	}
+
+	// ------------------------------------------------------------ cloud agents (a VM per job, ending in a PR)
+
+	/** Jobs across all vos (or one), newest first. */
+	async agents(options: { state?: "active" | "all"; vos?: string } = {}): Promise<AgentJob[]> {
+		const query = new URLSearchParams();
+		if (options.state) query.set("state", options.state);
+		if (options.vos) query.set("vos", options.vos);
+		const suffix = query.size ? `?${query.toString()}` : "";
+		return asList<AgentJob>(await this.request<unknown>("GET", `/agents${suffix}`), "agents");
+	}
+	/** Start one, owned by `dot`. */
+	startAgent(dot: string, input: AgentInput): Promise<AgentJob> {
+		return this.request("POST", "/agents", { dot, body: input });
+	}
+	agent(id: string, dot?: string): Promise<AgentJob> {
+		return this.request("GET", `/agents/${encodeURIComponent(id)}`, { dot });
+	}
+	async agentLog(id: string, after = 0, dot?: string): Promise<{ lines: AgentLogLine[]; next: number }> {
+		const value = await this.request<{ lines?: AgentLogLine[]; next?: number } | null>(
+			"GET",
+			`/agents/${encodeURIComponent(id)}/log?after=${after}`,
+			{ dot },
+		);
+		return { lines: value?.lines ?? [], next: Number(value?.next ?? after) };
+	}
+	/** A follow-up instruction to the running agent. */
+	messageAgent(id: string, text: string, dot?: string): Promise<unknown> {
+		return this.request("POST", `/agents/${encodeURIComponent(id)}/message`, { dot, body: { text } });
+	}
+	cancelAgent(id: string, dot?: string): Promise<AgentJob> {
+		return this.request("POST", `/agents/${encodeURIComponent(id)}/cancel`, { dot, body: {} });
+	}
+	/** A new job with the same repo, task and base. */
+	retryAgent(id: string, dot?: string): Promise<AgentJob> {
+		return this.request("POST", `/agents/${encodeURIComponent(id)}/retry`, { dot, body: {} });
+	}
+	async github(): Promise<GithubStatus> {
+		const value = await this.request<Partial<GithubStatus> | null>("GET", "/github");
+		return {
+			configured: value?.configured === true,
+			repos: Array.isArray(value?.repos) ? value.repos : [],
+			...(value?.appSlug ? { appSlug: value.appSlug } : {}),
+			...(value?.installUrl ? { installUrl: value.installUrl } : {}),
+		};
 	}
 
 	// ------------------------------------------------------------ routines (per vos)

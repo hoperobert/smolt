@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
+import { isAgentActive } from "../../agents.ts";
 import { isBusy, moodLabel, rosterSections, sectionNames, sortRoster } from "../../format.ts";
 import type { Dot, Group, RosterDot } from "../../types.ts";
 import {
 	attempt,
+	openAgents,
 	openInbox,
 	openVos,
 	refreshRoster,
@@ -202,6 +204,7 @@ export function VosRoster() {
 	const sections = rosterSections(roster?.dots ?? []);
 	const isActive = (id: string) => v.page === "thread" && v.selected === id;
 	const open = v.inboxCount?.open ?? v.inbox?.filter((i) => i.state === "open").length ?? 0;
+	const running = v.agents?.filter((j) => isAgentActive(j.state)).length ?? 0;
 	return (
 		<nav
 			aria-label="Your vos"
@@ -213,6 +216,13 @@ export function VosRoster() {
 				</span>
 				<span className={cn("min-w-0 flex-1 truncate", open > 0 && "font-semibold text-foreground")}>Inbox</span>
 				<Count count={open} tone={(v.inboxCount?.high ?? 0) > 0 ? "warn" : "primary"} />
+			</Row>
+			<Row active={v.page === "agents"} onClick={() => openAgents(null)} title="Coding jobs in their own VMs, ending in PRs">
+				<span className="flex size-5 flex-none items-center justify-center text-faint">
+					<Icon name="cloud" />
+				</span>
+				<span className="min-w-0 flex-1 truncate">Cloud agents</span>
+				{running > 0 && <span className="text-[11.5px] tabular-nums text-tint-text">{running} running</span>}
 			</Row>
 			{!roster && !v.rosterError && <p className="px-3 py-1.5 text-[13px] text-faint">Loading…</p>}
 			{v.rosterError && !roster && <p className="px-3 py-1.5 text-[13px] text-destructive">{v.rosterError}</p>}

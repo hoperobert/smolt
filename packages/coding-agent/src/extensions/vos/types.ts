@@ -361,8 +361,59 @@ export interface InboxItem {
 	detail?: string;
 	priority: InboxPriority;
 	state: "open" | "done" | "dismissed";
-	ref?: { type: "approval" | "secret" | "safety" | "task" | "message" | "routine"; id: string };
+	ref?: { type: "approval" | "secret" | "safety" | "task" | "message" | "routine" | "agent"; id: string };
 	date: string;
+}
+
+export type AgentJobState =
+	| "queued"
+	| "provisioning"
+	| "running"
+	| "testing"
+	| "pushing"
+	| "waiting"
+	| "done"
+	| "failed"
+	| "cancelled";
+
+/** A cloud agent: smolt run headless in a fresh VM on one repo, ending in a PR (`GET /agents`). */
+export interface AgentJob {
+	id: string;
+	/** The owning vos. */
+	vos: string;
+	/** "owner/name". */
+	repo: string;
+	base: string;
+	/** The work branch it pushes. */
+	branch: string;
+	task: string;
+	state: AgentJobState;
+	/** What it is doing this moment. */
+	step?: string;
+	vm?: { id: string; node: string; name: string } | null;
+	pr?: { number: number; url: string; title: string; checks?: "pending" | "passing" | "failing" } | null;
+	summary?: string;
+	error?: string;
+	/** Approval ids this job raised. */
+	approvals: string[];
+	createdAt: string;
+	startedAt?: string;
+	finishedAt?: string;
+	costSeconds?: number;
+}
+
+export interface AgentLogLine {
+	at: string;
+	stream: "agent" | "tool" | "shell" | "system";
+	text: string;
+}
+
+/** `GET /github`: whether the GitHub App is set up, and the repos it can reach. */
+export interface GithubStatus {
+	configured: boolean;
+	appSlug?: string;
+	installUrl?: string;
+	repos: string[];
 }
 
 /** `GET /inbox/count`. */
@@ -425,4 +476,11 @@ export interface VosPairing {
 }
 
 /** A view request's answer: the value, or the server's error and status. */
-export type VosCallResult = { ok: true; value: unknown } | { ok: false; error: string; status: number };
+export type VosCallResult =
+	| { ok: true; value: unknown }
+	| {
+			ok: false;
+			error: string;
+			status: number /** Where to install the GitHub App, when that is what failed. */;
+			installUrl?: string;
+	  };

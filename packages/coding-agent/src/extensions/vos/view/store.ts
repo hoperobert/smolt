@@ -1,9 +1,13 @@
 import { useSyncExternalStore } from "react";
+import { AgentLog, isAgentActive } from "../agents.ts";
 import { readComputerState } from "../client.ts";
 import type {
+	AgentJob,
+	AgentLogLine,
 	Approval,
 	ApprovalRemember,
 	ComputerState,
+	GithubStatus,
 	InboxCount,
 	InboxItem,
 	MemoryNote,
@@ -49,8 +53,8 @@ export type VosTab =
 	| "computers"
 	| "profile";
 
-/** The main pane: a thread (with its tabs) or the inbox across all vos. */
-export type VosPage = "thread" | "inbox";
+/** The main pane: a thread (with its tabs), the inbox across all vos, or cloud agents. */
+export type VosPage = "thread" | "inbox" | "agents";
 
 export interface ThreadState {
 	messages: Message[];
@@ -142,6 +146,13 @@ interface VosStore {
 	pair: PairState | null;
 	hiddenOpen: boolean;
 	dialog: DialogState | null;
+	/** Cloud agent jobs across all vos, newest first. */
+	agents: AgentJob[] | null;
+	agentsError: string | null;
+	/** The job open in detail. */
+	agent: string | null;
+	agentLogs: Map<string, AgentLog>;
+	github: GithubStatus | null;
 }
 
 export const vos: VosStore = {
@@ -172,6 +183,11 @@ export const vos: VosStore = {
 	pair: null,
 	hiddenOpen: false,
 	dialog: null,
+	agents: null,
+	agentsError: null,
+	agent: null,
+	agentLogs: new Map(),
+	github: null,
 };
 
 const listeners = new Set<() => void>();
@@ -314,6 +330,7 @@ export async function refreshConnection(): Promise<void> {
 	if (vos.connection?.connected && !connectionOnly) {
 		await refreshRoster();
 		void loadInbox();
+		void loadAgents();
 		if (!vos.selected) openVos();
 	}
 }
@@ -372,6 +389,10 @@ function resetData(): void {
 	vos.screens = null;
 	vos.images.clear();
 	vos.teach = null;
+	vos.agents = null;
+	vos.agent = null;
+	vos.agentLogs.clear();
+	vos.github = null;
 }
 
 export async function refreshRoster(): Promise<void> {
@@ -406,6 +427,7 @@ let leaseTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Show a thread (or the first vos), on a tab when one is named. */
 export function openVos(dot?: string, tab?: VosTab): void {
+	stopAgentTimer();
 	vos.page = "thread";
 	if (tab) vos.tab = tab;
 	if (dot) void selectThread(dot);
@@ -418,6 +440,7 @@ export function openVos(dot?: string, tab?: VosTab): void {
 }
 
 export function openInbox(): void {
+	stopAgentTimer();
 	vos.page = "inbox";
 	vos.notice = null;
 	bumpVos();
@@ -588,6 +611,19 @@ export function applyEvent(incoming: Incoming): void {
 		case "inbox.updated": {
 			const item = ((data as { item?: InboxItem } | null)?.item ?? data) as InboxItem;
 			if (item?.id && vos.inbox) vos.inbox = upsert(vos.inbox, item);
+			break;
+		}
+		case "agent.updated": {
+			const job = ((data as { job?: AgentJob } | null)?.job ?? data) as AgentJob;
+			if (!job?.id) return;
+			vos.agents = upsert(vos.agents ?? [], job).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+			break;
+		}
+		case "agent.log": {
+			const { id, line } = (data ?? {}) as { id?: string; line?: AgentLogLine };
+			const log = id ? vos.agentLogs.get(id) : undefined;
+			if (!log || !line) return;
+			log.push(line);
 			break;
 		}
 		case "skill":
@@ -981,4 +1017,161 @@ export function clearTeach(): void {
 export function toggleHiddenOpen(): void {
 	vos.hiddenOpen = !vos.hiddenOpen;
 	bumpVos();
+}
+
+// ---------------------------------------------------------------- cloud agents
+
+let agentTimer: ReturnType<typeof setInterval> | null = null;
+let agentTicks = 0;
+
+function stopAgentTimer(): void {
+	if (agentTimer) clearInterval(agentTimer);
+	agentTimer = null;
+}
+
+const agentById = (id: string): AgentJob | undefined => vos.agents?.find((j) => j.id === id);
+
+/**
+ * The cloud agents page, on a job when one is named. While it shows, the open
+ * job's log is fetched every few seconds (live `agent.log` events show lines
+ * sooner, but may drop some) and the list every few more.
+ */
+export function openAgents(id?: string | null): void {
+	vos.page = "agents";
+	vos.notice = null;
+	if (id !== undefined) vos.agent = id;
+	bumpVos();
+	void loadAgents();
+	void loadGithub();
+	if (vos.agent) void openAgent(vos.agent);
+	stopAgentTimer();
+	agentTicks = 0;
+	agentTimer = setInterval(() => {
+		if (vos.page !== "agents") return stopAgentTimer();
+		agentTicks += 1;
+		const open = vos.agent ? agentById(vos.agent) : undefined;
+		if (open && isAgentActive(open.state)) {
+			void loadAgentLog(open);
+			void refreshAgent(open.id);
+			void bridge.request("watch", { dot: open.vos }).catch(() => {});
+		}
+		if (agentTicks % 3 === 0) void loadAgents();
+	}, 4000);
+}
+
+export async function loadAgents(): Promise<void> {
+	try {
+		const value = await vosCall<unknown>("GET", "/agents?state=all");
+		vos.agents = asList<AgentJob>(value, "agents");
+		vos.agentsError = null;
+	} catch (error) {
+		vos.agentsError = error instanceof Error ? error.message : String(error);
+	}
+	bumpVos();
+}
+
+export async function loadGithub(): Promise<void> {
+	const value = await vosCall<Partial<GithubStatus>>("GET", "/github").catch(() => undefined);
+	if (value) {
+		vos.github = {
+			configured: value.configured === true,
+			repos: Array.isArray(value.repos) ? value.repos : [],
+			...(value.appSlug ? { appSlug: value.appSlug } : {}),
+			...(value.installUrl ? { installUrl: value.installUrl } : {}),
+		};
+	}
+	bumpVos();
+}
+
+async function refreshAgent(id: string): Promise<void> {
+	const job = await vosCall<AgentJob>("GET", `/agents/${encodeURIComponent(id)}`, undefined, agentById(id)?.vos).catch(
+		() => undefined,
+	);
+	if (!job?.id) return;
+	vos.agents = upsert(vos.agents ?? [], job).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	bumpVos();
+}
+
+/** Show one job: its log from the start, and its vos's events for live lines. */
+export async function openAgent(id: string): Promise<void> {
+	vos.agent = id;
+	if (!vos.agentLogs.has(id)) vos.agentLogs.set(id, new AgentLog());
+	bumpVos();
+	if (!agentById(id)) await refreshAgent(id);
+	const job = agentById(id);
+	if (!job) return;
+	void bridge.request("watch", { dot: job.vos }).catch(() => {});
+	await loadAgentLog(job);
+}
+
+export function closeAgent(): void {
+	vos.agent = null;
+	bumpVos();
+}
+
+export async function loadAgentLog(job: AgentJob): Promise<void> {
+	const log = vos.agentLogs.get(job.id) ?? new AgentLog();
+	vos.agentLogs.set(job.id, log);
+	const value = await vosCall<{ lines?: AgentLogLine[]; next?: number }>(
+		"GET",
+		`/agents/${encodeURIComponent(job.id)}/log?after=${log.next}`,
+		undefined,
+		job.vos,
+	).catch(() => undefined);
+	if (!value) return;
+	log.merge(value);
+	bumpVos();
+}
+
+export interface AgentStart {
+	vos: string;
+	repo: string;
+	task: string;
+	base?: string;
+}
+
+/** Start a job; on failure, the reason and (when the GitHub App is missing) where to install it. */
+export async function startAgent(input: AgentStart): Promise<{ error: string; installUrl?: string } | null> {
+	const result = (await bridge.request("call", {
+		method: "POST",
+		path: "/agents",
+		body: { repo: input.repo, task: input.task, ...(input.base ? { base: input.base } : {}) },
+		dot: input.vos,
+	})) as VosCallResult;
+	if (!result.ok) return { error: result.error, ...(result.installUrl ? { installUrl: result.installUrl } : {}) };
+	const job = result.value as AgentJob;
+	if (job?.id) {
+		vos.agents = upsert(vos.agents ?? [], job).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+		void openAgent(job.id);
+	}
+	bumpVos();
+	return null;
+}
+
+export async function cancelAgent(job: AgentJob): Promise<void> {
+	const next = await attempt(() =>
+		vosCall<AgentJob>("POST", `/agents/${encodeURIComponent(job.id)}/cancel`, {}, job.vos),
+	);
+	if (next?.id) vos.agents = upsert(vos.agents ?? [], next);
+	bumpVos();
+}
+
+export async function retryAgent(job: AgentJob): Promise<void> {
+	const next = await attempt(() =>
+		vosCall<AgentJob>("POST", `/agents/${encodeURIComponent(job.id)}/retry`, {}, job.vos),
+	);
+	if (!next?.id) return;
+	vos.agents = upsert(vos.agents ?? [], next).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	await openAgent(next.id);
+}
+
+export async function messageAgent(job: AgentJob, text: string): Promise<boolean> {
+	const trimmed = text.trim();
+	if (!trimmed) return false;
+	const sent = await attempt(() =>
+		vosCall("POST", `/agents/${encodeURIComponent(job.id)}/message`, { text: trimmed }, job.vos),
+	);
+	if (sent === undefined) return false;
+	void loadAgentLog(job);
+	return true;
 }

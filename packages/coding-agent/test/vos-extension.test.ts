@@ -611,7 +611,7 @@ describe("Vos additions", () => {
 			"vos:main",
 			"\0back",
 		]);
-		expect(homeItems(roster, 2).map((i) => i.value)).toEqual(["inbox", "vos:r1", "vos:main", "group:g1"]);
+		expect(homeItems(roster, 2).map((i) => i.value)).toEqual(["inbox", "agents", "vos:r1", "vos:main", "group:g1"]);
 	});
 
 	test("approve-in-advance expiries", () => {
