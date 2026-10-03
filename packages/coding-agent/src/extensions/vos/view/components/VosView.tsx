@@ -219,6 +219,7 @@ function Thread() {
 						{subtitle && <div className="truncate text-[12.5px] text-muted-foreground">{subtitle}</div>}
 					</div>
 				</div>
+				<div className="flex flex-none items-center gap-1">
 				<nav aria-label="Vos pages" className="flex flex-wrap items-center gap-0.5 rounded-xl border bg-card/60 p-0.5">
 					{tabs.map((t) => (
 						<button
@@ -236,6 +237,7 @@ function Thread() {
 					))}
 				</nav>
 				<SectionMenu />
+				</div>
 			</header>
 			<Notice />
 			<div className={cn("flex min-h-0 flex-1 flex-col", tab !== "chat" && "overflow-y-auto")} data-vos-page={tab}>

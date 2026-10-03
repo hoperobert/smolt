@@ -603,6 +603,14 @@ describe("Vos additions", () => {
 			"vos:main",
 			"\0back",
 		]);
+		// A purchase or account change is approved on the phone, with Face ID: here it can only be denied.
+		expect(inboxActions(approval, true).map((a) => a.value)).toEqual([
+			"deny",
+			"done",
+			"dismiss",
+			"vos:main",
+			"\0back",
+		]);
 		expect(homeItems(roster, 2).map((i) => i.value)).toEqual(["inbox", "vos:r1", "vos:main", "group:g1"]);
 	});
 
@@ -627,6 +635,7 @@ describe("Vos additions", () => {
 			"GET /v1/inbox/count": { open: 3, high: 1 },
 			"GET /v1/computer": { userInControl: false, handoff: { approvalId: "ap9", reason: "2FA code" } },
 			"POST /v1/plugins/gh/connect": { url: "https://github.com/login/oauth" },
+			"POST /v1/plugins/email/connect": { authUrl: "https://vos.test/connect/email?t=1", expiresAt: "" },
 		};
 		const client = new VosClient({
 			baseUrl: "https://vos.test",
@@ -655,6 +664,8 @@ describe("Vos additions", () => {
 		await client.answerApproval("ada", "ap1", "deny", "1h");
 		expect(calls.at(-1)?.body).toEqual({ decision: "deny" });
 		expect(await client.connectPlugin("gh")).toEqual({ url: "https://github.com/login/oauth" });
+		// The server names the sign-in page authUrl (what the phone app reads); either works.
+		expect(await client.connectPlugin("email")).toEqual({ url: "https://vos.test/connect/email?t=1" });
 		expect(await client.computer("ada")).toEqual({
 			userInControl: false,
 			handoffApprovalId: "ap9",

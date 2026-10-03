@@ -16,8 +16,9 @@ export function screenImage(screen: Pick<Screen, "jpegBase64">): string | undefi
 const KEYS = new Set(["Enter", "Backspace", "Tab", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Delete"]);
 
 /**
- * A vos's computer, live. Frames come over the extension's WebSocket to
- * /v1/computer/live; when that cannot open, it falls back to /v1/screens
+ * A vos's computer, live. A desktop's frames come over the extension's
+ * WebSocket to /v1/computer/live, a browser's as `computer.frame` events while
+ * /v1/computer/watch holds; with neither, it falls back to /v1/screens
  * snapshots about once a second. With `interactive`, clicks, scrolls and keys
  * go back to the computer (the user is driving, as in Teach a task).
  */
@@ -38,18 +39,33 @@ export function LiveScreen({ dot, interactive = false, className }: { dot: strin
 			>;
 			if (!stopped && !result.ok) setFallback(true);
 		};
+		// The browser's frames come over the thread's event stream while a watch holds (a minute at a time).
+		const watch = (): void => void vosCall("POST", "/computer/watch", {}, dot).catch(() => {});
 		void open();
+		watch();
 		const renew = setInterval(() => void open(), 15_000);
+		const rewatch = setInterval(watch, 30_000);
 		return () => {
 			stopped = true;
 			clearInterval(renew);
+			clearInterval(rewatch);
 			void bridge.request("liveClose", { dot }).catch(() => {});
+			void vosCall("POST", "/computer/unwatch", {}, dot).catch(() => {});
 		};
 	}, [dot]);
 
 	useEffect(() => {
 		if (live === "unavailable" || live === "closed") setFallback(true);
 	}, [live]);
+
+	// The live line only carries a desktop's frames; a vos in its browser sends none. With no frame a
+	// few seconds after opening, the snapshots take over.
+	const hasFrame = !!frame;
+	useEffect(() => {
+		if (hasFrame || fallback) return;
+		const timer = setTimeout(() => setFallback(true), 3000);
+		return () => clearTimeout(timer);
+	}, [hasFrame, fallback]);
 
 	useEffect(() => {
 		if (!fallback) return;
@@ -67,7 +83,8 @@ export function LiveScreen({ dot, interactive = false, className }: { dot: strin
 		};
 	}, [fallback, dot]);
 
-	const image = frame && !fallback ? frame.image : (snapshot ?? frame?.image);
+	const fresh = frame && Date.now() - frame.at < 5000;
+	const image = fresh ? frame.image : (snapshot ?? frame?.image);
 	const point = (event: { clientX: number; clientY: number }) => {
 		const rect = box.current?.getBoundingClientRect();
 		if (!rect) return { x: 0.5, y: 0.5 };
@@ -78,7 +95,7 @@ export function LiveScreen({ dot, interactive = false, className }: { dot: strin
 	};
 	const input = (payload: Record<string, unknown>): void => {
 		// Over the live line when it is open; otherwise the plain API takes the same fields.
-		if (live === "open" && !fallback) void bridge.request("liveInput", { dot, input: payload }).catch(() => {});
+		if (live === "open") void bridge.request("liveInput", { dot, input: payload }).catch(() => {});
 		else void vosCall("POST", "/computer/input", payload, dot).catch(() => {});
 	};
 
@@ -116,10 +133,10 @@ export function LiveScreen({ dot, interactive = false, className }: { dot: strin
 			<span
 				className={cn(
 					"absolute top-2 left-2 rounded-full px-2 py-0.5 text-[10.5px] font-semibold tracking-wide uppercase backdrop-blur",
-					live === "open" && !fallback ? "bg-destructive/85 text-white" : "bg-black/45 text-white/85",
+					fresh ? "bg-destructive/85 text-white" : "bg-black/45 text-white/85",
 				)}
 			>
-				{live === "open" && !fallback ? "Live" : "Snapshot"}
+				{fresh ? "Live" : "Snapshot"}
 			</span>
 		</div>
 	);

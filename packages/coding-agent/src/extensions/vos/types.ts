@@ -176,6 +176,9 @@ export type ApprovalRemember = "once" | "1h" | "today" | "always";
 /** Kinds the server always asks about: a remembered yes would change nothing. */
 export const ALWAYS_ASK_KINDS: readonly ActionKind[] = ["purchase", "deleteData", "accountChange"];
 
+/** Kinds only the phone can approve, with Face ID; anywhere else they can only be denied. */
+export const FACE_ID_KINDS: readonly ActionKind[] = ["purchase", "accountChange"];
+
 export type Trigger =
 	| { type: "schedule"; rrule: string; timezone: string }
 	| { type: "webhook" }

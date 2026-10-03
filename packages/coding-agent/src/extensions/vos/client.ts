@@ -374,9 +374,15 @@ export class VosClient {
 	async plugins(dot?: string): Promise<Plugin[]> {
 		return asList<Plugin>(await this.request<unknown>("GET", "/plugins", { dot }), "plugins");
 	}
-	/** Starts a sign-in; the URL is for the user's browser. */
-	connectPlugin(id: string, dot?: string): Promise<{ url?: string }> {
-		return this.request("POST", `/plugins/${encodeURIComponent(id)}/connect`, { dot, body: {} });
+	/** Starts a sign-in; the URL is for the user's browser (servers name it `authUrl` or `url`). */
+	async connectPlugin(id: string, dot?: string): Promise<{ url?: string }> {
+		const value = await this.request<{ url?: string; authUrl?: string } | null>(
+			"POST",
+			`/plugins/${encodeURIComponent(id)}/connect`,
+			{ dot, body: {} },
+		);
+		const url = value?.url ?? value?.authUrl;
+		return url ? { url } : {};
 	}
 	disconnectPlugin(id: string, dot?: string): Promise<unknown> {
 		return this.request("POST", `/plugins/${encodeURIComponent(id)}/disconnect`, { dot, body: {} });

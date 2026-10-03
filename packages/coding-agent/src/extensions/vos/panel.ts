@@ -18,7 +18,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { groupDot, type VosClient } from "./client.ts";
 import { ago, inboxKindLabel, moodLabel, rosterSections, sortInbox } from "./format.ts";
-import type { InboxItem, Message, Roster } from "./types.ts";
+import { FACE_ID_KINDS, type InboxItem, type Message, type Roster } from "./types.ts";
 
 /**
  * /vos panel: the Vos view's essentials in the terminal, as an overlay.
@@ -79,10 +79,15 @@ export function homeItems(roster: Roster, open: number): SelectItem[] {
 	return items;
 }
 
-/** What can be done with one inbox item from the terminal. */
-export function inboxActions(item: InboxItem): SelectItem[] {
+/**
+ * What can be done with one inbox item from the terminal. `faceId` marks an approval only the phone can
+ * give (a purchase or an account change): it can still be denied here.
+ */
+export function inboxActions(item: InboxItem, faceId = false): SelectItem[] {
 	const actions: SelectItem[] = [];
-	if (item.ref?.type === "approval" && item.state === "open" && item.kind === "approval") {
+	if (item.ref?.type === "approval" && item.state === "open" && item.kind === "approval" && faceId) {
+		actions.push({ value: "deny", label: "Deny", description: "Approve it on your phone: it needs Face ID" });
+	} else if (item.ref?.type === "approval" && item.state === "open" && item.kind === "approval") {
 		actions.push(
 			{ value: "approve:once", label: "Approve once" },
 			{ value: "approve:1h", label: "Approve for 1 hour" },
@@ -227,18 +232,25 @@ class VosPanel implements Component, Focusable {
 			items,
 			(id) => {
 				const item = this.inbox.find((i) => i.id === id);
-				if (item) this.showItem(item);
+				if (item) void this.showItem(item);
 			},
 			() => void this.home(),
 		);
 	}
 
-	private showItem(item: InboxItem): void {
+	private async showItem(item: InboxItem): Promise<void> {
 		const body = [new Text(this.theme.fg("muted", item.detail ?? inboxKindLabel(item.kind)), 1, 0)];
+		// Whether the approval behind it needs Face ID, from the vos's own state.
+		let faceId = false;
+		if (item.ref?.type === "approval") {
+			const state = await this.client.state(item.vos).catch(() => undefined);
+			const approval = state?.approvals.find((a) => a.id === item.ref?.id);
+			faceId = !!approval && FACE_ID_KINDS.includes(approval.kind);
+		}
 		this.list(
 			`${this.nameOf(item.vos)}: ${item.title}`,
 			body,
-			inboxActions(item),
+			inboxActions(item, faceId),
 			(action) => {
 				void this.act(item, action);
 			},

@@ -15,12 +15,13 @@ function ConnectorCard({ dot, plugin }: { dot: string; plugin: Plugin }) {
 	};
 	const connect = async (): Promise<void> => {
 		const result = await attempt(() =>
-			vosCall<{ url?: string }>("POST", `/plugins/${encodeURIComponent(plugin.id)}/connect`, {}, dot),
+			vosCall<{ url?: string; authUrl?: string }>("POST", `/plugins/${encodeURIComponent(plugin.id)}/connect`, {}, dot),
 		);
 		if (!result) return;
-		if (result.url) {
+		const url = result.url ?? result.authUrl;
+		if (url) {
 			// Sign-in happens in the user's browser; the list catches up when they come back.
-			bridge.openUrl(result.url);
+			bridge.openUrl(url);
 			setWaiting(true);
 			const again = () => {
 				if (document.visibilityState !== "visible") return;
@@ -49,16 +50,31 @@ function ConnectorCard({ dot, plugin }: { dot: string; plugin: Plugin }) {
 						{plugin.connected && (
 							<span className="rounded-full bg-ok/12 px-2 py-0.5 text-[11px] font-medium text-ok">Connected</span>
 						)}
-						{plugin.needsSignIn && (
+						{plugin.needsSignIn && plugin.account && (
 							<span className="rounded-full bg-warn/15 px-2 py-0.5 text-[11px] font-medium text-warn">Sign in again</span>
+						)}
+						{!plugin.connected && enabled && !plugin.needsSignIn && (
+							<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+								Not set up on the server
+							</span>
 						)}
 					</div>
 					{plugin.description && <p className="mt-0.5 text-[13px] text-muted-foreground">{plugin.description}</p>}
 					{plugin.account && <p className="mt-0.5 text-[12px] text-faint">as {plugin.account}</p>}
 				</div>
-				{plugin.connected || plugin.account ? (
-					<div className="flex flex-none items-center gap-2">
-						<Switch checked={!!enabled} aria-label={enabled ? `Turn ${plugin.name} off` : `Turn ${plugin.name} on`} onCheckedChange={(next) => void update({ enabled: next })} />
+				<div className="flex flex-none items-center gap-2">
+					{/* Only an app with an account to sign in to has a sign-in; the rest are a switch. */}
+					{plugin.needsSignIn && !plugin.account && (
+						<Button size="sm" disabled={waiting} onClick={() => void connect()}>
+							{waiting ? "Waiting for sign-in…" : "Connect"}
+						</Button>
+					)}
+					<Switch
+						checked={!!enabled}
+						aria-label={enabled ? `Turn ${plugin.name} off` : `Turn ${plugin.name} on`}
+						onCheckedChange={(next) => void update({ enabled: next })}
+					/>
+					{plugin.account && (
 						<Button
 							size="xs"
 							variant="ghost"
@@ -79,14 +95,10 @@ function ConnectorCard({ dot, plugin }: { dot: string; plugin: Plugin }) {
 						>
 							Disconnect
 						</Button>
-					</div>
-				) : (
-					<Button size="sm" className="flex-none" disabled={waiting} onClick={() => void connect()}>
-						{waiting ? "Waiting for sign-in…" : "Connect"}
-					</Button>
-				)}
+					)}
+				</div>
 			</div>
-			{(plugin.connected || plugin.account) && available.length > 0 && (
+			{enabled && available.length > 1 && (
 				<div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
 					<span className="mr-1 text-[12px] text-faint">Allowed to</span>
 					{available.map((scope) => {

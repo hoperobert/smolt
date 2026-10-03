@@ -13,6 +13,7 @@ import {
 import { taskIsLive, threadTimeline } from "../../timeline.ts";
 import {
 	ALWAYS_ASK_KINDS,
+	FACE_ID_KINDS,
 	type Approval,
 	type ApprovalRemember,
 	type Message,
@@ -252,7 +253,17 @@ function ApprovalCard({ dot, approval }: { dot: string; approval: Approval }) {
 					</span>
 				)}
 			</div>
-			{pending && !approval.handoff && (
+			{pending && !approval.handoff && FACE_ID_KINDS.includes(approval.kind) && (
+				<div className="mt-3 flex flex-wrap items-center gap-2">
+					<Button size="sm" variant="outline" onClick={() => void answerApproval(dot, approval.id, "deny")}>
+						Deny
+					</Button>
+					<span className="text-[12.5px] text-muted-foreground">
+						Approve this one on your phone: it needs Face ID.
+					</span>
+				</div>
+			)}
+			{pending && !approval.handoff && !FACE_ID_KINDS.includes(approval.kind) && (
 				<div className="mt-3 flex flex-wrap items-center gap-2">
 					<span className="text-[12px] text-faint">Approve</span>
 					<div role="group" aria-label="Approve for how long" className="inline-flex rounded-lg border bg-background p-0.5">
@@ -523,7 +534,7 @@ function Choices({ dot, message, thread }: { dot: string; message: Message; thre
 	);
 }
 
-function MessageLink({ message }: { message: Message }) {
+function MessageLink({ message, dot }: { message: Message; dot?: string }) {
 	const link = message.link;
 	if (!link) return null;
 	if (link.target.type === "url") {
@@ -571,6 +582,18 @@ function MessageLink({ message }: { message: Message }) {
 			</button>
 		);
 	}
+	if (link.target.type === "computer" && dot && !isGroupThread(dot)) {
+		// "Take over": the vos's computer, now.
+		return (
+			<button
+				type="button"
+				onClick={() => void takeover(dot, true)}
+				className="mt-2 inline-flex items-center gap-1 text-[13px] font-medium text-tint-text hover:underline"
+			>
+				{link.label}
+			</button>
+		);
+	}
 	return <span className="mt-2 inline-block text-[13px] text-faint">{link.label}</span>;
 }
 
@@ -606,7 +629,7 @@ function MessageRow({
 					<div className="mb-0.5 text-[12.5px] font-semibold text-foreground/90">{speaker.name}</div>
 				)}
 				{message.text && <VosText text={message.text} />}
-				<MessageLink message={message} />
+				<MessageLink message={message} dot={dot} />
 				<Attachment dot={dot} message={message} thread={thread} />
 				<Choices dot={dot} message={message} thread={thread} />
 			</div>

@@ -569,6 +569,7 @@ export function applyEvent(incoming: Incoming): void {
 		case "memory.added":
 		case "memory.created":
 		case "memory.updated":
+		case "memory.removed":
 		case "memory.deleted": {
 			const note = ((data as { note?: MemoryNote } | null)?.note ?? data) as MemoryNote & { deleted?: boolean };
 			const owner = vosOfThread(dot);
@@ -577,7 +578,9 @@ export function applyEvent(incoming: Incoming): void {
 			if (!list) break;
 			vos.memory.set(
 				owner,
-				event === "memory.deleted" || note.deleted ? list.filter((n) => n.id !== note.id) : upsert(list, note),
+				event === "memory.deleted" || event === "memory.removed" || note.deleted
+					? list.filter((n) => n.id !== note.id)
+					: upsert(list, note),
 			);
 			break;
 		}
@@ -615,6 +618,18 @@ export function applyEvent(incoming: Incoming): void {
 		case "computer":
 			if (!isGroupThread(dot)) void loadComputer(dot);
 			break;
+		case "computer.frame": {
+			// The browser's (and, without the live line, a desktop's) frames, while /computer/watch holds.
+			const shot = data as { jpegBase64?: string; width?: number; height?: number };
+			if (!shot?.jpegBase64) return;
+			vos.frames.set(dot, {
+				image: `data:image/jpeg;base64,${shot.jpegBase64}`,
+				w: Number(shot.width ?? 0),
+				h: Number(shot.height ?? 0),
+				at: Date.now(),
+			});
+			break;
+		}
 		case "group":
 		case "dot":
 			refreshRosterSoon();
