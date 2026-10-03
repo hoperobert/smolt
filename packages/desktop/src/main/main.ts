@@ -1003,6 +1003,7 @@ app.whenReady().then(async () => {
 		openUrl: (url) => {
 			if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
 		},
+		onError: (reason) => crashLog(`view host: ${reason}`),
 	});
 	const themeOf = (value: unknown): "light" | "dark" => (value === "light" ? "light" : "dark");
 	protocol.handle("smolt-view", async (request) => {

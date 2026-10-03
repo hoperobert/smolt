@@ -140,6 +140,8 @@ export interface ViewHostOptions {
 	}) => void;
 	/** An open_url request from an extension in the host. */
 	openUrl: (url: string) => void;
+	/** Why the host gave no views (for the crash log). */
+	onError?: (reason: string) => void;
 }
 
 export class ViewHost {
@@ -166,8 +168,12 @@ export class ViewHost {
 	private async boot(): Promise<void> {
 		const generation = ++this.generation;
 		const bridge = await this.options.start();
-		if (!bridge || generation !== this.generation) {
+		if (generation !== this.generation) {
 			await bridge?.stop();
+			return;
+		}
+		if (!bridge) {
+			this.failed("the agent did not start");
 			return;
 		}
 		this.bridge = bridge;
@@ -182,9 +188,22 @@ export class ViewHost {
 			const listed = (await bridge.call("listViews", [])) as { views?: unknown[] } | undefined;
 			this.setViews((listed?.views ?? []).filter(isViewInfo));
 			await bridge.call("attachViews", []);
-		} catch {
+		} catch (error) {
 			this.setViews([]);
+			this.failed(error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	/**
+	 * Without the host no extension shows a view, and nothing else says why: an
+	 * agent build older than the views API answers listViews with an error.
+	 */
+	private failed(reason: string): void {
+		this.options.onError?.(reason);
+		this.options.notify({
+			message: `Extension views could not load (${reason}). Rebuild packages/coding-agent and restart.`,
+			notifyType: "error",
+		});
 	}
 
 	/**
