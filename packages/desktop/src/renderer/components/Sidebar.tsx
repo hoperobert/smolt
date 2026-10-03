@@ -49,7 +49,7 @@ import { Icon } from "./ui/icon.tsx";
 import { Input } from "./ui/input.tsx";
 import { MoreMenu } from "./MoreMenu.tsx";
 import { UpdateBanner } from "./UpdateBanner.tsx";
-import { VosSidebar } from "./vos/VosSidebar.tsx";
+import { ExtensionViewsNav } from "./ExtensionViewsNav.tsx";
 
 /** Bucket a session by how long ago it was last touched. */
 function sessionBucket(lastActive: number): string {
@@ -388,8 +388,8 @@ function Group({ label, rows, ambiguous }: { label: string; rows: SessionRow[]; 
 					<SessionEntry
 						key={row.path}
 						row={row}
-						// While the Vos section has the main pane, no chat row is the one on screen.
-						active={row.path === app.currentSessionPath && !app.vosOpen}
+						// While an extension view has the main pane, no chat row is the one on screen.
+						active={row.path === app.currentSessionPath && !app.viewOpen}
 						ambiguous={ambiguous.has(row.title)}
 						pinned={app.pinned.has(row.path)}
 						selected={app.selectedSessions.has(row.path)}
@@ -615,7 +615,7 @@ export function Sidebar() {
 					}}
 				/>
 			)}
-			<VosSidebar />
+			<ExtensionViewsNav />
 			<div className="flex min-h-0 flex-1 flex-col gap-px overflow-x-hidden overflow-y-auto">
 				{!state.sessionsLoaded ? (
 					<SessionListSkeleton />

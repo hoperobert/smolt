@@ -10,6 +10,8 @@ import {
 	dialog,
 	ipcMain,
 	Menu,
+	Notification,
+	protocol,
 	safeStorage,
 	session,
 	shell,
@@ -23,7 +25,7 @@ import {
 	removePoolCredential,
 	setProviderPooled,
 } from "../../../coding-agent/src/extensions/pool/model.ts";
-import { AgentBridge, findCliPath } from "./agent-bridge.ts";
+import { AgentBridge, findCliPath, setHostRequestHandler } from "./agent-bridge.ts";
 import { pendingPermissionRequests, requestPid, watchPermissionRequests, writePermissionReply } from "./approvals.ts";
 import { createChatFolder, needsChatFolder, sweepEmptyChatFolders } from "./chat-folders.ts";
 import { ensureCliShim } from "./cli-shim.ts";
@@ -43,19 +45,57 @@ import { transformersEntry } from "./embeddings-module.ts";
 import { refreshIconCacheAfterUpdate } from "./icon-cache.ts";
 import { fetchLinkPreview } from "./link-preview.ts";
 import { searchProjectFiles } from "./project-files.ts";
+import { DesktopSecretStore, type KeyCipher, migrateLegacyVosKey } from "./secret-store.ts";
 import { listSessions, searchSessions, sessionCwd } from "./sessions.ts";
 import { chooseSlotForSession, type SlotChoice } from "./slots.ts";
 import { ensureModel, isModelCached, speechStatus, stopSpeech, transcribeSamples } from "./speech.ts";
 import { makeCliRunner, suggestStarters } from "./starters.ts";
 import { collectStats } from "./stats.ts";
 import { checkNow, installUpdate, startUpdates, updateState } from "./updates.ts";
-import { type KeyCipher, VosService } from "./vos.ts";
+import { VIEW_CSP, ViewHost } from "./views.ts";
 import { tapIpc, WebServer } from "./web-server.ts";
 import { checkoutBranch, createWorktree, listBranches, listWorktrees, removeWorktree, repoRoot } from "./worktrees.ts";
 
 // Before any handler registers: the web server answers browsers with the
 // same handlers the window gets, and this is how it learns them.
 tapIpc();
+
+// Extension views load from smolt-view://<id>/ into sandboxed frames; the
+// scheme must be known before the app is ready. See views.ts.
+protocol.registerSchemesAsPrivileged([{ scheme: "smolt-view", privileges: { standard: true, secure: true } }]);
+
+/**
+ * Extension secrets, sealed by the OS keystore in this process. Every agent
+ * is started with SMOLT_RPC_HOST_SECRETS=1 and asks here; see secret-store.ts.
+ */
+const keyCipher: KeyCipher = {
+	// Linux without a keyring falls back to a fixed plain-text "encryption";
+	// that is not storage worth trusting a key to, so it counts as none.
+	available: () =>
+		app.isReady() &&
+		safeStorage.isEncryptionAvailable() &&
+		(process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"),
+	encrypt: (plain) => safeStorage.encryptString(plain).toString("base64"),
+	decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
+};
+let secretStore: DesktopSecretStore | undefined;
+const secrets = (): DesktopSecretStore => {
+	if (!secretStore) {
+		secretStore = new DesktopSecretStore(keyCipher, join(agentDir(), "desktop-secrets.json"));
+		// The old built-in Vos section's key, moved into the Vos extension's secrets once.
+		try {
+			migrateLegacyVosKey(
+				secretStore,
+				keyCipher,
+				process.env.SMOLT_VOS_CONFIG?.trim() || join(homedir(), ".smolt", "vos.json"),
+			);
+		} catch {
+			// A key that cannot be moved is reconnected from the view.
+		}
+	}
+	return secretStore;
+};
+setHostRequestHandler((request) => secrets().handle(request));
 
 const SMOKE = process.env.SMOLT_DESKTOP_SMOKE === "1";
 
@@ -239,6 +279,8 @@ const STRIPPED_AGENT_VARS = [
 const embeddingsModule = transformersEntry();
 const agentEnv = (extra: Record<string, string>): Record<string, string | undefined> => ({
 	...Object.fromEntries(STRIPPED_AGENT_VARS.map((name) => [name, undefined])),
+	// Extensions keep their secrets with this process's OS keystore.
+	SMOLT_RPC_HOST_SECRETS: "1",
 	// Only providers set up in the app (or by the CLI's /login) exist to a
 	// desktop agent: a key left in the shell by some other tool must not put
 	// hundreds of unasked-for models in the list.
@@ -250,6 +292,8 @@ const agentEnv = (extra: Record<string, string>): Record<string, string | undefi
 });
 
 let telegramBridge: AgentBridge | null = null;
+/** The extension view host's agent (views.ts), for shutdown. */
+let viewHostBridge: AgentBridge | null = null;
 let telegramSync: Promise<void> = Promise.resolve();
 
 function telegramConfigPath(): string {
@@ -899,40 +943,94 @@ app.whenReady().then(async () => {
 		});
 	}
 
-	// Vos, the user's AI teammates: the key and every call to the Vos API
-	// live here, never in the window. See vos.ts.
-	const vosCipher: KeyCipher = {
-		// Linux without a keyring falls back to a fixed plain-text "encryption";
-		// that is not storage worth trusting a key to, so it counts as none.
-		available: () =>
-			safeStorage.isEncryptionAvailable() &&
-			(process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"),
-		encrypt: (plain) => safeStorage.encryptString(plain).toString("base64"),
-		decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
+	/**
+	 * An extension's notification. With `native`, an OS notification too, so
+	 * it is seen while the window is in the background; clicking it brings
+	 * the window forward, on the named view when there is one.
+	 */
+	const nativeNotify = (request: { message: string; native?: boolean; title?: string; openView?: string }): void => {
+		if (!request.native || !Notification.isSupported()) return;
+		const note = new Notification({ title: request.title ?? "smolt", body: request.message, silent: false });
+		note.on("click", () => {
+			if (win.isDestroyed()) return;
+			if (win.isMinimized()) win.restore();
+			win.show();
+			win.focus();
+			if (request.openView) win.webContents.send("views:open", request.openView);
+		});
+		note.show();
 	};
-	const vos = new VosService({
-		cipher: vosCipher,
+	/** A notify from the view host, whose events the chat never sees: a toast in the window too. */
+	const notifyFromExtension = (request: {
+		message: string;
+		notifyType?: string;
+		native?: boolean;
+		title?: string;
+		openView?: string;
+	}): void => {
+		if (!win.isDestroyed()) win.webContents.send("views:notify", request);
+		nativeNotify(request);
+	};
+
+	// Extension views: one agent of their own, apart from the chats. See views.ts.
+	const viewHost = new ViewHost({
+		start: async () => {
+			const host = new AgentBridge();
+			await host.start(
+				{
+					cwd: homeCwd(),
+					provider: process.env.SMOLT_DESKTOP_PROVIDER,
+					model: process.env.SMOLT_DESKTOP_MODEL,
+					env: agentEnv(PANE_ENV),
+					execPath: agentExecPath(),
+					onDiagnostic: crashLog,
+				},
+				__dirname,
+			);
+			if (host.status.error) {
+				crashLog(`view host: ${host.status.error}`);
+				await host.stop();
+				return null;
+			}
+			noteAgentPid(host);
+			viewHostBridge = host;
+			return host;
+		},
 		send: (channel, payload) => {
 			if (!win.isDestroyed()) win.webContents.send(channel, payload);
 		},
+		notify: notifyFromExtension,
+		openUrl: (url) => {
+			if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+		},
 	});
-	ipcMain.handle("vos:status", () => vos.status());
-	ipcMain.handle("vos:connect", (_e, url: unknown, key: unknown) => vos.connect(String(url ?? ""), String(key ?? "")));
-	ipcMain.handle("vos:disconnect", () => vos.disconnect());
-	ipcMain.handle("vos:pair-start", (_e, url: unknown) => vos.pairStart(String(url ?? "")));
-	ipcMain.handle("vos:pair-cancel", () => vos.pairCancel());
-	ipcMain.handle("vos:call", (_e, method: unknown, path: unknown, body?: unknown, dot?: unknown) =>
-		vos.call(String(method), String(path), body, typeof dot === "string" ? dot : undefined),
-	);
-	ipcMain.handle("vos:secret", (_e, dot: unknown, id: unknown, value: unknown) =>
-		vos.answerSecret(String(dot), String(id), typeof value === "string" ? value : ""),
-	);
-	ipcMain.handle("vos:file", (_e, path: unknown) => vos.file(String(path)));
-	ipcMain.handle("vos:watch", (_e, dot: unknown) => vos.watch(String(dot)));
-	ipcMain.handle("vos:unwatch", (_e, dot: unknown) => vos.unwatch(String(dot)));
-	ipcMain.handle("vos:live-open", (_e, dot: unknown) => vos.liveOpen(String(dot)));
-	ipcMain.handle("vos:live-input", (_e, dot: unknown, input: unknown) => vos.liveInput(String(dot), input));
-	ipcMain.handle("vos:live-close", (_e, dot: unknown) => vos.liveClose(String(dot)));
+	const themeOf = (value: unknown): "light" | "dark" => (value === "light" ? "light" : "dark");
+	protocol.handle("smolt-view", async (request) => {
+		const url = new URL(request.url);
+		const html = await viewHost.document(decodeURIComponent(url.hostname), themeOf(url.searchParams.get("theme")));
+		return new Response(html, {
+			headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": VIEW_CSP },
+		});
+	});
+	webServer.setViewRenderer((id, theme) => viewHost.document(id, themeOf(theme)));
+	ipcMain.handle("views:list", async () => {
+		await viewHost.ensure();
+		return viewHost.list();
+	});
+	ipcMain.handle("views:request", async (_e, viewId: unknown, method: unknown, params: unknown) => {
+		try {
+			return { ok: true, value: await viewHost.request(String(viewId), String(method), params) };
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	});
+	ipcMain.handle("views:reload", () => viewHost.restart());
+	ipcMain.handle("views:open-url", (_e, url: unknown) => {
+		const target = String(url ?? "");
+		if (/^https?:\/\//i.test(target)) void shell.openExternal(target);
+		return { ok: true };
+	});
+	void viewHost.ensure();
 
 	let active: AgentSlot = {
 		id: ++slotSeq,
@@ -1106,6 +1204,14 @@ app.whenReady().then(async () => {
 				const url = String((event as { url?: unknown }).url ?? "");
 				if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
 				return;
+			}
+			// An extension asking for an OS notification gets one whichever chat it runs in.
+			if (
+				type === "extension_ui_request" &&
+				(event as { method?: unknown }).method === "notify" &&
+				(event as { native?: unknown }).native === true
+			) {
+				nativeNotify(event as { message: string; native: true });
 			}
 			if (type === "extension_ui_request" && isDialogRequest(event)) {
 				win.webContents.send("agent:event", event, slot.id);
@@ -2617,7 +2723,10 @@ app.on("window-all-closed", () => {
 	// The speech model runs in a process of its own; nothing will be asked
 	// of it again, and it must not outlive the windows.
 	stopSpeech();
-	void Promise.all([...slots.map((slot) => slot.bridge.stop()), sideBridge?.stop(), telegramBridge?.stop()]).finally(
-		() => app.quit(),
-	);
+	void Promise.all([
+		...slots.map((slot) => slot.bridge.stop()),
+		sideBridge?.stop(),
+		telegramBridge?.stop(),
+		viewHostBridge?.stop(),
+	]).finally(() => app.quit());
 });

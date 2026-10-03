@@ -125,35 +125,24 @@ contextBridge.exposeInMainWorld("smolt", {
 	onSessionChanged: (cb: (info: { slot: number; path: string }) => void): void => {
 		ipcRenderer.on("session:changed", (_e, info) => cb(info));
 	},
-	vosStatus: (): Promise<unknown> => ipcRenderer.invoke("vos:status"),
-	vosConnect: (url: string, key: string): Promise<unknown> => ipcRenderer.invoke("vos:connect", url, key),
-	vosDisconnect: (): Promise<unknown> => ipcRenderer.invoke("vos:disconnect"),
-	vosPairStart: (url: string): Promise<unknown> => ipcRenderer.invoke("vos:pair-start", url),
-	vosPairCancel: (): Promise<void> => ipcRenderer.invoke("vos:pair-cancel"),
-	onVosPair: (cb: (state: unknown) => void): void => {
-		ipcRenderer.on("vos:pair", (_e, state) => cb(state));
+	views: (): Promise<unknown> => ipcRenderer.invoke("views:list"),
+	viewRequest: (viewId: string, method: string, params: unknown): Promise<unknown> =>
+		ipcRenderer.invoke("views:request", viewId, method, params),
+	viewsReload: (): Promise<unknown> => ipcRenderer.invoke("views:reload"),
+	viewUrl: (viewId: string, theme: string): string =>
+		`smolt-view://${encodeURIComponent(viewId)}/?theme=${encodeURIComponent(theme)}`,
+	openUrl: (url: string): Promise<unknown> => ipcRenderer.invoke("views:open-url", url),
+	onViewsChanged: (cb: (views: unknown) => void): void => {
+		ipcRenderer.on("views:changed", (_e, views) => cb(views));
 	},
-	vosCall: (method: string, path: string, body?: unknown, dot?: string): Promise<unknown> =>
-		ipcRenderer.invoke("vos:call", method, path, body, dot),
-	vosSecret: (dot: string, id: string, value: string): Promise<unknown> =>
-		ipcRenderer.invoke("vos:secret", dot, id, value),
-	vosFile: (path: string): Promise<unknown> => ipcRenderer.invoke("vos:file", path),
-	vosWatch: (dot: string): Promise<void> => ipcRenderer.invoke("vos:watch", dot),
-	vosUnwatch: (dot: string): Promise<void> => ipcRenderer.invoke("vos:unwatch", dot),
-	vosLiveOpen: (dot: string): Promise<unknown> => ipcRenderer.invoke("vos:live-open", dot),
-	vosLiveInput: (dot: string, input: unknown): Promise<unknown> => ipcRenderer.invoke("vos:live-input", dot, input),
-	vosLiveClose: (dot: string): Promise<void> => ipcRenderer.invoke("vos:live-close", dot),
-	onVosEvent: (cb: (event: unknown) => void): void => {
-		ipcRenderer.on("vos:event", (_e, event) => cb(event));
+	onViewEvent: (cb: (event: unknown) => void): void => {
+		ipcRenderer.on("views:event", (_e, event) => cb(event));
 	},
-	onVosStream: (cb: (state: unknown) => void): void => {
-		ipcRenderer.on("vos:stream", (_e, state) => cb(state));
+	onViewNotify: (cb: (request: unknown) => void): void => {
+		ipcRenderer.on("views:notify", (_e, request) => cb(request));
 	},
-	onVosFrame: (cb: (frame: unknown) => void): void => {
-		ipcRenderer.on("vos:frame", (_e, frame) => cb(frame));
-	},
-	onVosLive: (cb: (state: unknown) => void): void => {
-		ipcRenderer.on("vos:live", (_e, state) => cb(state));
+	onViewOpen: (cb: (viewId: string) => void): void => {
+		ipcRenderer.on("views:open", (_e, viewId: string) => cb(viewId));
 	},
 	webServer: (): Promise<unknown> => ipcRenderer.invoke("app:web-server"),
 	setWebServer: (enabled: boolean): Promise<unknown> => ipcRenderer.invoke("app:web-server-set", enabled),

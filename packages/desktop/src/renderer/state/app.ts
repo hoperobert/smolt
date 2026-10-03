@@ -1,4 +1,4 @@
-import { api, type SessionRow, type UpdateState } from "../lib/api.ts";
+import { api, type SessionRow, type UpdateState, type ViewInfo } from "../lib/api.ts";
 import { forgetPreference, storedPreference, storePreference } from "../lib/prefs.ts";
 import {
 	attachToolResult,
@@ -394,8 +394,10 @@ interface AppState {
 	pinned: Set<string>;
 	archived: Set<string>;
 	collapsedGroups: Set<string>;
-	/** The main pane shows the Vos section instead of the chat. */
-	vosOpen: boolean;
+	/** The main pane shows this extension view instead of the chat. */
+	viewOpen: string | null;
+	/** Views extensions registered (state/views.ts keeps this current). */
+	views: ViewInfo[];
 }
 
 export const app: AppState = {
@@ -507,7 +509,8 @@ export const app: AppState = {
 	pinned: new Set<string>(),
 	archived: new Set<string>(),
 	collapsedGroups: new Set<string>(),
-	vosOpen: false,
+	viewOpen: null,
+	views: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -2063,9 +2066,9 @@ let switchesInFlight = 0;
 const abandonedSwitches = new Set<string>();
 
 export async function switchToSession(path: string, options: { follow?: boolean } = {}): Promise<void> {
-	if (app.vosOpen) {
-		// Picking a chat from the sidebar leaves the Vos section for it.
-		app.vosOpen = false;
+	if (app.viewOpen) {
+		// Picking a chat from the sidebar leaves the extension view for it.
+		app.viewOpen = null;
 		bump();
 	}
 	if (path === app.currentSessionPath) return;
@@ -2233,8 +2236,8 @@ async function loadStoredMessages(path: string): Promise<void> {
 }
 
 export async function newSession(options: { follow?: boolean; temporary?: boolean } = {}): Promise<void> {
-	if (app.vosOpen) {
-		app.vosOpen = false;
+	if (app.viewOpen) {
+		app.viewOpen = null;
 		bump();
 	}
 	// Already looking at an empty chat, saved or not: there is nothing to move

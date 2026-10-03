@@ -6,6 +6,7 @@ import https from "node:https";
 import { networkInterfaces } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { type BrowserWindow, ipcMain } from "electron";
+import { VIEW_CSP } from "./views.ts";
 
 /**
  * The app in a browser: a small HTTP server inside the running desktop
@@ -331,9 +332,15 @@ export class WebServer {
 	private keepAlive: NodeJS.Timeout | undefined;
 	private token = "";
 	private allowedHosts = new Set<string>();
+	private renderView: ((id: string, theme: string) => Promise<string>) | undefined;
 
 	constructor(options: WebServerOptions) {
 		this.options = options;
+	}
+
+	/** How an extension view's document is made; the same one the window's smolt-view: protocol serves. */
+	setViewRenderer(render: (id: string, theme: string) => Promise<string>): void {
+		this.renderView = render;
 	}
 
 	settings(): WebServerSettings {
@@ -478,7 +485,7 @@ export class WebServer {
 				}
 				const privileged =
 					(req.method === "POST" && (url === "/invoke" || url === "/send")) ||
-					(req.method === "GET" && url === "/events");
+					(req.method === "GET" && (url === "/events" || url === "/view"));
 				if (privileged && (this.token === "" || !this.tokenOk(req, req.url ?? ""))) {
 					res.writeHead(403);
 					res.end();
@@ -516,6 +523,18 @@ export class WebServer {
 					res.write(": connected\n\n");
 					this.clients.add(res);
 					res.on("close", () => this.clients.delete(res));
+				} else if (req.method === "GET" && url === "/view") {
+					// An extension view, for a sandboxed frame: its own CSP, no network.
+					const query = new URL(`http://x${req.url ?? ""}`).searchParams;
+					const html = this.renderView
+						? await this.renderView(query.get("id") ?? "", query.get("theme") ?? "dark")
+						: "<!doctype html><p>No views.</p>";
+					res.writeHead(200, {
+						"content-type": MIME[".html"],
+						"content-security-policy": VIEW_CSP,
+						"cache-control": "no-store",
+					});
+					res.end(html);
 				} else if (req.method === "POST" && url === "/invoke") {
 					const body = JSON.parse(await readBody(req)) as { channel?: string; args?: unknown[] };
 					const channel = String(body.channel ?? "");

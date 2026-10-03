@@ -58,12 +58,10 @@ Settings › General › "Local web server" serves the app in a browser from the
 
 The browser gets `window.smolt` from `src/web-shim.ts`, the preload's API over `POST /invoke` and an SSE stream at `/events`; a test keeps the two in step. `src/main/web-server.ts` records every `ipcMain.handle` and mirrors every `webContents.send`, so a browser client sees exactly what the window sees. Every window shows the same chat: a message sent from one streams into all of them through the mirrored agent events, and a chat opened in one is followed by the others (`session:changed`, announced by the main process after every move; a window not already there loads the chat the way it loads any other).
 
-## Vos
+## Extension views
 
-The sidebar's Vos section is the user's Vos teammates (vos-api.vosgrau.com): roster, chats and group chats, routines, skills, Teach a task, auto-review rules, secret requests and the computers gallery. The connect screen pairs by QR: the main process asks the server for a pairing, the page draws the QR locally, and the device key the phone's approval mints goes straight to the main process (pasting an API key is the fallback). `src/main/vos.ts` holds the key (encrypted with Electron safeStorage in `~/.smolt/vos.json`) and makes every Vos call, event stream and live-computer socket; the renderer asks for them by path through `window.smolt.vos*` and never sees the key. The client, types and helpers are shared with the TUI's `/vos` (`packages/coding-agent/src/extensions/vos/`).
+Extensions can contribute pages to the app (`smolt.registerView`, see the coding agent's `docs/extensions.md`). The app runs one agent of its own for them, the view host (`src/main/views.ts`), apart from the chat agents, so a view's connections and background work outlive chat switches. The sidebar lists `sidebar` views above the chats (with the badge an extension sets) and opens them in the main pane; `settings` views appear as sections in Settings. Each page is drawn in a sandboxed iframe (scripts only) from `smolt-view://<id>/` in the window and `/view?id=` in the browser build, with a CSP that allows no network at all; the injected `window.smolt` carries requests and events over postMessage, IPC (`views:*`) and RPC to the extension, and the app's theme arrives as CSS variables. Switching an extension off in Settings restarts the view host, so its views leave at once.
 
-To work on it without a server, run the mock and point the connect screen at `http://127.0.0.1:8787` (click the server name under the QR). The mock prints a `curl` that approves each pairing; the API-key fallback takes `dev-vos-key`:
+Extension secrets (`smolt.secrets`) are kept here too: every agent runs with `SMOLT_RPC_HOST_SECRETS=1` and asks this process, which seals values with Electron safeStorage in `desktop-secrets.json` in the agent directory (`src/main/secret-store.ts`). `ctx.ui.notify(message, type, { native: true })` from any agent shows an OS notification.
 
-```bash
-node packages/desktop/scripts/mock-vos.mjs
-```
+Vos (the user's AI teammates) is such an extension: `packages/coding-agent/src/extensions/vos/`, with its view built from `view/`. Nothing about it lives in this package beyond a one-time move of the key the old built-in section kept in `~/.smolt/vos.json` into the extension's secrets.

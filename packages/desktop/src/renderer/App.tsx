@@ -30,7 +30,7 @@ import { Sidebar } from "./components/Sidebar.tsx";
 import { Titlebar } from "./components/Titlebar.tsx";
 import { toggleAllToolOutput, Transcript } from "./components/Transcript.tsx";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
-import { VosView } from "./components/vos/VosView.tsx";
+import { ExtensionView } from "./components/ExtensionView.tsx";
 
 /**
  * Whether the reader's last click landed in the sidebar.
@@ -94,7 +94,7 @@ export function App() {
 					if (app.shortcutsOpen) {
 						app.shortcutsOpen = false;
 						bump();
-					} else if (app.chat.streaming && !app.vosOpen) {
+					} else if (app.chat.streaming && !app.viewOpen) {
 						// Escape is the universal "stop that". Nothing else owns it
 						// once the dialogs are shut, and a turn in flight is the one
 						// thing a reader most often wants out of.
@@ -179,14 +179,8 @@ export function App() {
 	useEffect(() => {
 		const onMouseDown = (e: MouseEvent): void => {
 			const target = e.target as HTMLElement;
-			// The Vos section has forms of its own; the only field typing should
-			// fall into there is its chat composer, when one is showing.
-			if (target.closest("[data-vos-view]")) {
-				if (target.closest("button, input, textarea, a, select, label, [role], [data-slot], .md, img")) return;
-				if (window.getSelection()?.toString()) return;
-				setTimeout(() => document.querySelector<HTMLTextAreaElement>("[data-vos-composer]")?.focus(), 0);
-				return;
-			}
+			// An extension view owns its own focus: clicks there are its page's.
+			if (target.closest("[data-extension-view]")) return;
 			// Prose and code are selection surfaces: stealing focus mid-drag
 			// would tear the selection out of the reader's hands.
 			if (target.closest("button, input, textarea, a, details, [role=dialog], [role=menu], [data-slot], .md, pre")) {
@@ -244,8 +238,14 @@ export function App() {
 			<div className="flex h-dvh">
 				<Sidebar />
 				<main className="flex min-w-0 flex-1 flex-col pt-12 @container">
-					{state.vosOpen ? (
-						<VosView />
+					{state.viewOpen ? (
+						<div className="flex min-h-0 flex-1" data-extension-view>
+							<ExtensionView
+								key={state.viewOpen}
+								viewId={state.viewOpen}
+								title={state.views.find((v) => v.id === state.viewOpen)?.title ?? "Extension"}
+							/>
+						</div>
 					) : !state.chatLoading && state.chatEmpty && state.chat.messages.length === 0 ? (
 						// A chat with nothing in it yet: the composer sits in the middle of the page.
 						<NewChatPage>

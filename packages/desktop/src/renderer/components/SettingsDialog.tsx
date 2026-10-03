@@ -29,7 +29,8 @@ import {
 } from "../state/app.ts";
 import { AUTO_THINKING_ENTRY, thinkingLabel } from "../thinking.ts";
 import { useApp } from "../state/useApp.ts";
-import { disconnectVos, openVos, useVos } from "../state/vos.ts";
+import { reloadViews } from "../state/views.ts";
+import { ExtensionView } from "./ExtensionView.tsx";
 import { Button } from "./ui/button.tsx";
 import { Tip } from "./ui/tooltip.tsx";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog.tsx";
@@ -221,52 +222,22 @@ function matches(query: string, haystack: string): boolean {
  * process; the hint says where to open it, or why it could not start.
  */
 /**
- * Vos, from Settings: who this app is connected as, and the way out.
- * Disconnecting only forgets the key here; a paired key is revoked from the
- * phone, which is what the confirmation says.
+ * Settings sections extensions contribute (`location: "settings"` views):
+ * each extension's own page in a short sandboxed frame, sized to its content.
  */
-function VosSection() {
-	const v = useVos();
-	const connection = v.connection;
-	const hint = !connection?.connected
-		? "Not connected. Pair with your iPhone to chat with your vos here."
-		: connection.deviceName
-			? `Connected as ${connection.deviceName} · ${connection.url.replace(/^https?:\/\//, "")}`
-			: `Connected with ${connection.keySource === "env" ? "VOS_API_KEY" : "an API key"} · ${connection.url.replace(/^https?:\/\//, "")}`;
+function ExtensionSettingsViews({ query }: { query: string }) {
+	const state = useApp();
+	const views = state.views.filter(
+		(view) => view.location === "settings" && matches(query, `${view.title} ${view.extension} extension`),
+	);
 	return (
-		<Row label="Vos" hint={hint}>
-			{connection?.connected ? (
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={async () => {
-						const ok = await requestConfirm({
-							title: "Disconnect Vos?",
-							message: connection.deviceName
-								? "smolt forgets this device's key. To revoke the key itself, open the Vos app: Settings › Connected devices."
-								: "smolt forgets the API key. Your vos and their work stay on the server.",
-							actionLabel: "Disconnect",
-							destructive: true,
-						});
-						if (ok) await disconnectVos();
-					}}
-				>
-					Disconnect
-				</Button>
-			) : (
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => {
-						app.settingsOpen = false;
-						bump();
-						openVos();
-					}}
-				>
-					Connect
-				</Button>
-			)}
-		</Row>
+		<>
+			{views.map((view) => (
+				<div key={view.id} className="py-1.5">
+					<ExtensionView viewId={view.id} title={view.title} autoHeight />
+				</div>
+			))}
+		</>
 	);
 }
 
@@ -659,7 +630,7 @@ export function SettingsDialog() {
 										/>
 									</Row>
 								)}
-								{matches(query, "vos teammates phone pair paired connected device") && <VosSection />}
+								<ExtensionSettingsViews query={query} />
 								{matches(query, "web server browser phone tailscale remote") && <WebServerSection />}
 								{matches(query, "worktree isolation git branch") && <WorktreeSection />}
 								{matches(query, "compact export html session") && (
@@ -1051,6 +1022,8 @@ export function SettingsDialog() {
 																current.map((entry) => (entry.id === extension.id ? { ...entry, enabled: next } : entry)),
 															);
 															await call("setExtensionEnabled", extension.id, next);
+															// Its views come and go now, not with the next chat.
+															await reloadViews();
 														}}
 													/>
 												</Row>

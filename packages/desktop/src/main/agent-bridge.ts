@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { RpcClient } from "../../../coding-agent/src/modes/rpc/rpc-client.ts";
+import type { RpcHostRequest } from "../../../coding-agent/src/modes/rpc/rpc-types.ts";
 
 /**
  * Bridges the renderer to a smolt agent subprocess running in RPC mode.
@@ -52,7 +53,22 @@ const ALLOWED_METHODS = new Set([
 	"fork",
 	"getForkMessages",
 	"respondExtensionUI",
+	// Extension views: called by the view host (views.ts), never straight from the renderer.
+	"listViews",
+	"getView",
+	"viewRequest",
+	"attachViews",
 ]);
+
+/**
+ * Who answers the agents' host requests (extension secrets). One for every
+ * agent the app starts, set once by main.ts; agents are told they may ask by
+ * SMOLT_RPC_HOST_SECRETS=1.
+ */
+let hostRequestHandler: ((request: RpcHostRequest) => unknown | Promise<unknown>) | undefined;
+export function setHostRequestHandler(handler: (request: RpcHostRequest) => unknown | Promise<unknown>): void {
+	hostRequestHandler = handler;
+}
 
 export interface BridgeOptions {
 	cwd?: string;
@@ -107,6 +123,10 @@ export class AgentBridge {
 				env: options.env,
 				execPath: options.execPath,
 				onDiagnostic: options.onDiagnostic,
+				onHostRequest: (request) => {
+					if (!hostRequestHandler) throw new Error("This app keeps no secrets yet");
+					return hostRequestHandler(request);
+				},
 			});
 			for (const listener of this.exitListeners) client.onExit(listener);
 			client.onEvent((event) => {

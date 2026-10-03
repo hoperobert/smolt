@@ -132,53 +132,42 @@ export interface SmoltApi {
 	onReloadDeferred(cb: (info: { sessionPath: string }) => void): void;
 	/** The app moved to another chat, from this window or any other on it. */
 	onSessionChanged(cb: (info: { slot: number; path: string }) => void): void;
-	/** Vos: the connection lives in the main process, which holds the key. */
-	vosStatus(): Promise<VosConnection>;
-	/** Check and keep a key; an empty key keeps the one held and changes only the address. */
-	vosConnect(url: string, key: string): Promise<VosConnection>;
-	vosDisconnect(): Promise<VosConnection>;
-	/** Start pairing with the phone: the QR's text, six digits and expiry. The key never comes here. */
-	vosPairStart(
-		url: string,
-	): Promise<
-		| { ok: true; value: { id: string; qr: string; short?: string; expiresAt: string; name: string } }
-		| { ok: false; error: string; status: number }
-	>;
-	vosPairCancel(): Promise<void>;
-	onVosPair(cb: (state: { id: string; state: "approved" | "denied" | "expired" }) => void): void;
-	vosCall(method: string, path: string, body?: unknown, dot?: string): Promise<VosCallResult>;
-	/** Answer a secret request; the value is never kept on this side. */
-	vosSecret(dot: string, id: string, value: string): Promise<VosCallResult>;
-	/** A file the API serves, as a data URL. */
-	vosFile(path: string): Promise<VosCallResult>;
-	/** Follow a thread's live events (a lease: renew it while the thread is open). */
-	vosWatch(dot: string): Promise<void>;
-	vosUnwatch(dot: string): Promise<void>;
-	vosLiveOpen(dot: string): Promise<VosCallResult>;
-	vosLiveInput(dot: string, input: unknown): Promise<VosCallResult>;
-	vosLiveClose(dot: string): Promise<void>;
-	onVosEvent(cb: (event: { dot: string; event: string; data: unknown; id?: string }) => void): void;
-	onVosStream(cb: (state: { dot: string; state: "connecting" | "live" | "error"; error?: string }) => void): void;
-	onVosFrame(cb: (frame: { dot: string; w: number; h: number; cursor: unknown; image: string }) => void): void;
-	onVosLive(cb: (state: { dot: string; state: "open" | "closed" | "unavailable" }) => void): void;
+	/** Extension views (see main/views.ts): the list, starting the host when needed. */
+	views(): Promise<ViewInfo[]>;
+	/** One `window.smolt.request` from a view, answered by its extension. */
+	viewRequest(
+		viewId: string,
+		method: string,
+		params: unknown,
+	): Promise<{ ok: boolean; value?: unknown; error?: string }>;
+	/** Restart the view host: after an extension is switched on or off. */
+	viewsReload(): Promise<ViewInfo[]>;
+	/** Where a view's sandboxed frame loads from. */
+	viewUrl(viewId: string, theme: string): string;
+	/** Open an http(s) link in the browser. */
+	openUrl(url: string): Promise<unknown>;
+	onViewsChanged(cb: (views: ViewInfo[]) => void): void;
+	onViewEvent(cb: (event: { viewId: string; event: string; data: unknown }) => void): void;
+	/** A notify from an extension in the view host (the chat's own come as agent events). */
+	onViewNotify(cb: (request: { message: string; notifyType?: string }) => void): void;
+	/** A native notification was clicked: show this view. */
+	onViewOpen(cb: (viewId: string) => void): void;
 	/** The in-app web server: whether it is on, and where to open it. */
 	webServer(): Promise<WebServerState>;
 	setWebServer(enabled: boolean): Promise<WebServerState>;
 	ready(): void;
 }
 
-export interface VosConnection {
-	connected: boolean;
-	url: string;
-	/** "encrypted": kept with the OS keystore; "session": this run only; "env": from VOS_API_KEY. */
-	keySource: "encrypted" | "session" | "env" | "none";
-	canPersist: boolean;
-	/** The name this app was paired as, when its key came from the phone. */
-	deviceName?: string;
-	error?: string;
+/** A view an extension registered, as the sidebar and settings list it. */
+export interface ViewInfo {
+	id: string;
+	extension: string;
+	title: string;
+	icon?: string;
+	location: "sidebar" | "settings";
+	order: number;
+	badge?: number | string;
 }
-
-export type VosCallResult = { ok: true; value: unknown } | { ok: false; error: string; status: number };
 
 export interface WebServerState {
 	enabled: boolean;
