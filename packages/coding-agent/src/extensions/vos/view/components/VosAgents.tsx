@@ -80,11 +80,11 @@ function Setup({ installUrl }: { installUrl?: string }) {
 			</span>
 			<div className="min-w-0 flex-1">
 				<div className="text-[13.5px] font-medium">Connect GitHub</div>
-				<div className="text-[12.5px] text-muted-foreground">Install the Vos app on the repos agents may use.</div>
+				<div className="text-[12.5px] text-muted-foreground">Agents need GitHub to clone and open PRs.</div>
 			</div>
 			{installUrl && (
 				<Button size="sm" onClick={() => bridge.openUrl(installUrl)}>
-					Install
+					Connect
 				</Button>
 			)}
 			<Button size="sm" variant="outline" onClick={() => void loadGithub()}>
@@ -145,7 +145,7 @@ function StartForm({ onDone }: { onDone: () => void }) {
 					<span>{error.error}</span>
 					{error.installUrl && (
 						<Button size="xs" variant="outline" onClick={() => error.installUrl && bridge.openUrl(error.installUrl)}>
-							Install GitHub app
+							Connect GitHub
 						</Button>
 					)}
 				</div>

@@ -411,8 +411,13 @@ export interface AgentLogLine {
 /** `GET /github`: whether the GitHub App is set up, and the repos it can reach. */
 export interface GithubStatus {
 	configured: boolean;
+	/** The GitHub App, or the user's own account connected in Vos Connect. */
+	source?: "app" | "connect";
 	appSlug?: string;
+	login?: string;
+	/** Where to set GitHub up: the App's install page, or the server's connectUrl. */
 	installUrl?: string;
+	connectUrl?: string;
 	repos: string[];
 }
 

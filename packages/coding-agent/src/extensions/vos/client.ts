@@ -256,7 +256,9 @@ export class VosClient {
 			value = undefined;
 		}
 		if (!response.ok) {
-			const body = (value && typeof value === "object" ? value : {}) as { error?: unknown; installUrl?: unknown };
+			const body = (value && typeof value === "object" ? value : {}) as { error?: unknown; installUrl?: unknown; connectUrl?: unknown };
+			// Where to go to fix it: the GitHub App's install page, or Vos Connect's GitHub sign-in.
+			const fix = body.installUrl ?? body.connectUrl;
 			const message =
 				typeof body.error === "string"
 					? body.error
@@ -266,7 +268,7 @@ export class VosClient {
 			throw new VosError(
 				message,
 				response.status,
-				typeof body.installUrl === "string" && /^https?:\/\//.test(body.installUrl) ? body.installUrl : undefined,
+				typeof fix === "string" && /^https?:\/\//.test(fix) ? fix : undefined,
 			);
 		}
 		return value as T;
@@ -469,7 +471,9 @@ export class VosClient {
 			configured: value?.configured === true,
 			repos: Array.isArray(value?.repos) ? value.repos : [],
 			...(value?.appSlug ? { appSlug: value.appSlug } : {}),
-			...(value?.installUrl ? { installUrl: value.installUrl } : {}),
+			...(value?.installUrl || value?.connectUrl ? { installUrl: value.installUrl ?? value.connectUrl } : {}),
+			...(value?.source ? { source: value.source } : {}),
+			...(value?.login ? { login: value.login } : {}),
 		};
 	}
 

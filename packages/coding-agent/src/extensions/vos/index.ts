@@ -442,7 +442,7 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 					say(`Cloud agent queued on **${job.repo}** \`${job.branch}\`. \`/vos agents\` to follow it.`);
 				} catch (error) {
 					if (error instanceof VosError && error.installUrl) {
-						say(`${error.message} Install the GitHub App: ${error.installUrl}`);
+						say(`${error.message} Connect GitHub: ${error.installUrl}`);
 						return;
 					}
 					throw error;

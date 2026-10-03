@@ -367,7 +367,7 @@ class VosPanel implements Component, Focusable {
 						await this.showAgent(job.id, () => this.showAgents());
 					},
 					(error: unknown) => {
-						const install = error instanceof VosError && error.installUrl ? ` Install: ${error.installUrl}` : "";
+						const install = error instanceof VosError && error.installUrl ? ` Connect GitHub: ${error.installUrl}` : "";
 						this.note("Cloud agents", `${error instanceof Error ? error.message : String(error)}${install}`);
 						setTimeout(() => this.showAgents(), 3000);
 					},

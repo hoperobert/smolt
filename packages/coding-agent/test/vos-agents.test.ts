@@ -303,7 +303,7 @@ describe("cloud agents against the mock server", () => {
 
 			await run("agent nobody/else do a thing");
 			expect(said.at(-1)).toMatch(
-				/isn't installed on nobody\/else\. Install the GitHub App: https:\/\/github\.com\/apps\//,
+				/isn't installed on nobody\/else\. Connect GitHub: https:\/\/github\.com\/apps\//,
 			);
 			await run("agent acme/site");
 			expect(notes.at(-1)?.text).toContain("Usage: /vos agent");
