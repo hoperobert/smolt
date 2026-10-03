@@ -37,6 +37,7 @@ out.jsonl
 smolt-*.html
 out.html
 packages/coding-agent/binaries/
+packages/coding-agent/src/extensions/vos/view/dist/
 todo.md
 plans/
 .smolt/hf-sessions/

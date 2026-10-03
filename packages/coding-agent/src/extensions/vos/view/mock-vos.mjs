@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * A mock Vos API for developing smolt's Vos section without a real server.
+ * A mock Vos API for developing smolt's Vos view without a real server.
  *
- *   node packages/desktop/scripts/mock-vos.mjs            # http://127.0.0.1:8787, key "dev-vos-key"
+ *   node packages/coding-agent/src/extensions/vos/view/mock-vos.mjs# http://127.0.0.1:8787, key "dev-vos-key"
  *   MOCK_VOS_PORT=9000 MOCK_VOS_KEY=other node …/mock-vos.mjs
  *
  * Serves the endpoints of the teammates contract with fake, in-memory data:
@@ -100,9 +100,9 @@ const look = (color, shape = "round") => ({ shape, color, accessories: [], pet: 
 const dots = new Map(
 	[
 		{ id: "main", name: "Vos", look: look("sky"), label: "Chief of staff", isPaused: false, createdAt: minutesAgo(90_000), personality: "Calm, brief, a little dry.", job: "Runs my inbox, calendar and errands.", rules: "Never book anything before 9am.", lastReadAt: minutesAgo(30) },
-		{ id: "ada", name: "Ada", look: look("coral"), label: "Research", pinned: true, isPaused: false, createdAt: minutesAgo(50_000), personality: "Curious and thorough; cites sources.", job: "Digs into papers, markets and competitors.", rules: "", lastReadAt: minutesAgo(200) },
-		{ id: "penny", name: "Penny", look: look("mint"), label: "Finance", isPaused: false, createdAt: minutesAgo(40_000), personality: "Precise. Hates surprises.", job: "Chases invoices and reconciles the books.", rules: "Ask before paying anything over £200.", lastReadAt: minutesAgo(5) },
-		{ id: "rex", name: "Rex", look: look("lilac", "square"), label: "Ops", isPaused: false, createdAt: minutesAgo(20_000), personality: "Fast and practical.", job: "Keeps the servers and deploys healthy.", rules: "", lastReadAt: minutesAgo(1) },
+		{ id: "ada", name: "Ada", look: look("coral"), label: "Research", pinned: true, section: "Work", isPaused: false, createdAt: minutesAgo(50_000), personality: "Curious and thorough; cites sources.", job: "Digs into papers, markets and competitors.", rules: "", lastReadAt: minutesAgo(200) },
+		{ id: "penny", name: "Penny", look: look("mint"), label: "Finance", section: "Work", isPaused: false, createdAt: minutesAgo(40_000), personality: "Precise. Hates surprises.", job: "Chases invoices and reconciles the books.", rules: "Ask before paying anything over £200.", lastReadAt: minutesAgo(5) },
+		{ id: "rex", name: "Rex", look: look("lilac", "square"), label: "Ops", section: "Side project", isPaused: false, createdAt: minutesAgo(20_000), personality: "Fast and practical.", job: "Keeps the servers and deploys healthy.", rules: "", lastReadAt: minutesAgo(1) },
 		{ id: "intern", name: "Old intern", look: look("sand"), label: "Archive", hidden: true, isPaused: true, createdAt: minutesAgo(100_000), personality: "", job: "Retired.", rules: "", lastReadAt: minutesAgo(10_000) },
 	].map((d) => [d.id, d]),
 );
@@ -113,6 +113,36 @@ const status = new Map([
 	["rex", { mood: "working", statusLine: "Checking the deploy" }],
 	["intern", { mood: "paused", statusLine: "Paused" }],
 ]);
+// The dots-parity additions: memory, the inbox, connectors, the computer's handoff.
+const memory = new Map([
+	["main", [
+		{ id: "n1", text: "Prefers meetings after 10am, never on Fridays.", source: "chat", date: minutesAgo(3000) },
+		{ id: "n2", text: "Dentist is Dr Okafor on Elm Street.", source: "task", date: minutesAgo(78) },
+		{ id: "n3", text: "Partner's birthday is 14 March; likes Japanese food.", source: "you", date: minutesAgo(9000) },
+	]],
+	["ada", [{ id: "n4", text: "Cite primary sources; summaries under 300 words.", source: "you", date: minutesAgo(400) }]],
+]);
+const inbox = new Map(
+	[
+		{ id: "i1", vos: "penny", kind: "approval", title: "Pay the AWS invoice (£212.40)?", detail: "Over your £200 limit, so it waits for you.", priority: "high", state: "open", ref: { type: "approval", id: "ap-penny" }, date: minutesAgo(4) },
+		{ id: "i2", vos: "main", kind: "secret", title: "GitHub token for the staging deploy", detail: "Goes into GITHUB_TOKEN on its computer.", priority: "high", state: "open", ref: { type: "secret", id: "sec-1" }, date: minutesAgo(3) },
+		{ id: "i3", vos: "rex", kind: "handoff", title: "Needs a 2FA code to sign in to the registrar", detail: "Take over the computer, type the code, hand it back.", priority: "high", state: "open", ref: { type: "approval", id: "ap-rex-2fa" }, date: minutesAgo(2) },
+		{ id: "i4", vos: "ada", kind: "finding", title: "Two competitors cut prices this week", detail: "Read-only research while idle.", priority: "low", state: "open", ref: { type: "message", id: "m-find" }, date: minutesAgo(55) },
+		{ id: "i5", vos: "main", kind: "done", title: "Morning briefing sent", priority: "low", state: "open", ref: { type: "routine", id: "r-brief" }, date: minutesAgo(240) },
+		{ id: "i6", vos: "ada", kind: "question", title: "Which market should the report cover: UK or EU?", priority: "normal", state: "open", ref: { type: "message", id: "m-q" }, date: minutesAgo(30) },
+	].map((i) => [i.id, i]),
+);
+let inboxReadAt = minutesAgo(60);
+const plugins = new Map(
+	[
+		{ id: "gmail", name: "Gmail", description: "Read, draft and send email.", connected: true, enabled: true, account: "rob@example.com", scopes: ["read", "send"], availableScopes: ["read", "send"] },
+		{ id: "calendar", name: "Google Calendar", description: "See and change your calendar.", connected: true, enabled: true, account: "rob@example.com", scopes: ["read"], availableScopes: ["read", "write"] },
+		{ id: "github", name: "GitHub", description: "Issues, pull requests and code.", connected: false, enabled: false, scopes: [], availableScopes: ["read", "write"] },
+		{ id: "slack", name: "Slack", description: "Messages in your workspace.", connected: false, enabled: false, scopes: [], availableScopes: ["read", "send"] },
+	].map((p) => [p.id, p]),
+);
+const computers = new Map([["rex", { userInControl: false, handoffApprovalId: "ap-rex-2fa", handoffReason: "Type the 2FA code from your phone to sign in to the registrar." }]]);
+
 const groups = new Map([
 	["launch", { id: "launch", name: "Launch crew", members: ["ada", "main", "rex"], createdAt: minutesAgo(9000), lastMessageAt: minutesAgo(12) }],
 ]);
@@ -529,7 +559,7 @@ const server = http.createServer(async (req, res) => {
 		const d = dots.get(seg[1]);
 		if (!d) return json(res, 404, { error: "No such vos" });
 		if (!seg[2] && method === "PATCH") {
-			for (const k of ["name", "label", "personality", "job", "rules", "look", "pinned", "hidden"]) if (body[k] !== undefined) d[k] = body[k];
+			for (const k of ["name", "label", "personality", "job", "rules", "look", "pinned", "hidden", "section"]) if (body[k] !== undefined) d[k] = body[k] ?? undefined;
 			emit(d.id, "dot", d);
 			return json(res, 200, d);
 		}
@@ -855,6 +885,95 @@ const server = http.createServer(async (req, res) => {
 			res.writeHead(204);
 			return res.end();
 		}
+	}
+
+	// memory (per vos)
+	if (p === "/memory" && method === "GET") return json(res, 200, memory.get(vosId) ?? []);
+	if (p === "/memory" && method === "POST") {
+		if (!String(body.text ?? "").trim()) return json(res, 400, { error: "Empty note" });
+		const note = { id: uuid(), text: String(body.text).trim(), source: "you", date: now() };
+		memory.set(vosId, [note, ...(memory.get(vosId) ?? [])]);
+		emit(threadId, "memory.added", note);
+		return json(res, 201, note);
+	}
+	if (seg[0] === "memory" && seg[1]) {
+		const list = memory.get(vosId) ?? [];
+		const note = list.find((n) => n.id === seg[1]);
+		if (!note) return json(res, 404, { error: "No such note" });
+		if (method === "PATCH") {
+			note.text = String(body.text ?? note.text);
+			emit(threadId, "memory.updated", { note });
+			return json(res, 200, note);
+		}
+		if (method === "DELETE") {
+			memory.set(vosId, list.filter((n) => n.id !== seg[1]));
+			emit(threadId, "memory.deleted", { id: seg[1] });
+			return json(res, 200, { ok: true });
+		}
+	}
+
+	// the inbox (all vos)
+	if (p === "/inbox/count") {
+		const open = [...inbox.values()].filter((i) => i.state === "open");
+		return json(res, 200, { open: open.length, high: open.filter((i) => i.priority === "high").length, unread: open.filter((i) => i.date > inboxReadAt).length });
+	}
+	if (p === "/inbox/read" && method === "POST") {
+		inboxReadAt = now();
+		return json(res, 200, { unread: 0 });
+	}
+	if (p === "/inbox" && method === "GET") {
+		const all = url.searchParams.get("state") === "all";
+		const only = url.searchParams.get("vos");
+		return json(res, 200, [...inbox.values()].filter((i) => (all || i.state === "open") && (!only || i.vos === only)).sort((a, b) => b.date.localeCompare(a.date)));
+	}
+	if (seg[0] === "inbox" && seg[1] && (seg[2] === "done" || seg[2] === "dismiss") && method === "POST") {
+		const item = inbox.get(seg[1]);
+		if (!item) return json(res, 404, { error: "No such item" });
+		item.state = seg[2] === "done" ? "done" : "dismissed";
+		emit(item.vos, "inbox.updated", { item });
+		return json(res, 200, item);
+	}
+
+	// connectors
+	if (p === "/plugins" && method === "GET") return json(res, 200, [...plugins.values()]);
+	if (seg[0] === "plugins" && seg[1]) {
+		const plugin = plugins.get(seg[1]);
+		if (!plugin) return json(res, 404, { error: "No such connector" });
+		if (seg[2] === "connect" && method === "POST") {
+			Object.assign(plugin, { connected: true, enabled: true, account: "rob@example.com", scopes: [...plugin.availableScopes] });
+			return json(res, 200, { url: `https://example.com/oauth/${plugin.id}` });
+		}
+		if (seg[2] === "disconnect" && method === "POST") {
+			Object.assign(plugin, { connected: false, enabled: false, account: undefined, scopes: [] });
+			return json(res, 200, plugin);
+		}
+		if (!seg[2] && method === "PATCH") {
+			if (Array.isArray(body.scopes)) plugin.scopes = body.scopes.filter((s) => plugin.availableScopes.includes(s));
+			if (typeof body.enabled === "boolean") plugin.enabled = body.enabled;
+			return json(res, 200, plugin);
+		}
+	}
+
+	// the computer: takeover, and coding agents
+	if (p === "/computer" && method === "GET") {
+		const c = computers.get(vosId) ?? { userInControl: false, handoffApprovalId: null };
+		return json(res, 200, { id: `pc-${vosId}`, ...c, handoff: c.handoffApprovalId ? { id: c.handoffApprovalId, title: c.handoffReason, handoff: true } : null });
+	}
+	if ((p === "/computer/takeover" || p === "/computer/handback") && method === "POST") {
+		const c = computers.get(vosId) ?? { userInControl: false };
+		if (p === "/computer/takeover") c.userInControl = true;
+		else Object.assign(c, { userInControl: false, handoffApprovalId: null, handoffReason: undefined });
+		computers.set(vosId, c);
+		emit(threadId, "computer", c);
+		return json(res, 200, c);
+	}
+	if (p === "/computer/input" && method === "POST") return json(res, 200, { ok: true });
+	if (p === "/code" && method === "POST") {
+		if (!String(body.task ?? "").trim()) return json(res, 400, { error: "Say what to build or fix." });
+		const task = { id: uuid(), title: `Code: ${String(body.task).slice(0, 60)}`, prompt: body.task, status: "inProgress", steps: [], progress: 0.1, createdAt: now(), plan: [{ text: `Clone ${body.repo ?? "the workspace"}`, status: "doing" }, { text: "Run Claude Code", status: "todo" }, { text: "Report back", status: "todo" }], now: "Cloning the repository", nowAt: now(), heartbeat: beat() };
+		t.tasks.set(task.id, task);
+		emit(threadId, "task.created", task);
+		return json(res, 201, task);
 	}
 
 	// computers

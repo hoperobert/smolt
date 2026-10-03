@@ -7,6 +7,9 @@ import { deviceName, pollPairing, startPairing, VosError } from "../src/extensio
 import { createVosExtension, pairingMessage, pairingQrLines } from "../src/extensions/vos/index.ts";
 import { encodeQr, qrSvgPath, qrTerminal } from "../src/extensions/vos/qr.ts";
 
+/** The view half of the API, which these terminal tests do not exercise. */
+const viewStubs = { registerView: () => {}, onViewRequest: () => {}, postToView: () => {}, setViewBadge: () => {} };
+
 const PAIR = {
 	id: "pr_1",
 	code: "c0de-secret-c0de-secret-c0de-secret",
@@ -96,11 +99,19 @@ describe("/vos connect in the terminal", () => {
 			if (url.endsWith("/pair")) return new Response(JSON.stringify(PAIR), { status: 201 });
 			return new Response(JSON.stringify(polls.shift() ?? { state: "pending" }));
 		}) as typeof fetch;
+		const secrets = new Map<string, string>();
 		const smolt = {
+			...viewStubs,
 			registerCommand: (name: string, options: { handler: (args: string, ctx: unknown) => Promise<void> }) =>
 				commands.set(name, options),
 			sendMessage: (message: { content: string }) => said.push(message.content),
 			on: () => {},
+			secrets: {
+				get: async (key: string) => secrets.get(key),
+				set: async (key: string, value: string) => void secrets.set(key, value),
+				delete: async (key: string) => void secrets.delete(key),
+				backend: async () => "file",
+			},
 		} as unknown as ExtensionAPI;
 		createVosExtension({ env: { SMOLT_VOS_CONFIG: path }, fetch: fetchImpl, pollMs: 5, host: "DESK" })(smolt);
 		const ctx = {
@@ -110,10 +121,10 @@ describe("/vos connect in the terminal", () => {
 				setWidget: (_key: string, content: unknown) => widgets.push(content),
 			},
 		};
-		return { run: (args: string) => commands.get("vos")!.handler(args, ctx), said, widgets, path };
+		return { run: (args: string) => commands.get("vos")!.handler(args, ctx), said, widgets, path, secrets };
 	}
 
-	test("shows the QR and code, then saves the approved device key owner-only", async () => {
+	test("shows the QR and code, then keeps the approved device key in the secret store", async () => {
 		const h = harness([{ state: "pending" }, { state: "approved", key: "vosd_abc" }]);
 		await h.run("connect");
 		expect(h.said[0]).toContain("482 913");
@@ -122,12 +133,12 @@ describe("/vos connect in the terminal", () => {
 		await new Promise((resolve) => setTimeout(resolve, 60));
 		expect(h.said.at(-1)).toContain("Connected as **smolt (terminal) on DESK**");
 		expect(h.widgets.at(-1)).toBeUndefined();
-		const file = JSON.parse(readFileSync(h.path, "utf-8"));
-		expect(file).toMatchObject({
-			apiKey: "vosd_abc",
-			deviceName: "smolt (terminal) on DESK",
-			url: "https://vos-api.vosgrau.com",
-		});
+		expect(h.said.at(-1)).toContain("in a file only you can read");
+		expect(h.secrets.get("apiKey")).toBe("vosd_abc");
+		expect(h.secrets.get("deviceName")).toBe("smolt (terminal) on DESK");
+		const file = readFileSync(h.path, "utf-8");
+		expect(file).not.toContain("vosd_abc");
+		expect(JSON.parse(file)).toEqual({ url: "https://vos-api.vosgrau.com" });
 		if (process.platform !== "win32") expect(statSync(h.path).mode & 0o777).toBe(0o600);
 	});
 
@@ -137,6 +148,7 @@ describe("/vos connect in the terminal", () => {
 		await new Promise((resolve) => setTimeout(resolve, 40));
 		expect(h.said.at(-1)).toContain("declined");
 		expect(() => readFileSync(h.path, "utf-8")).toThrow();
+		expect(h.secrets.size).toBe(0);
 	});
 
 	test("the message carries the digits; the QR lines force white on black", () => {
@@ -151,6 +163,7 @@ describe("a revoked key", () => {
 		const notes: string[] = [];
 		const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
 		const smolt = {
+			...viewStubs,
 			registerCommand: (name: string, options: { handler: (args: string, ctx: unknown) => Promise<void> }) =>
 				commands.set(name, options),
 			sendMessage: () => {},

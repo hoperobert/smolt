@@ -1,4 +1,4 @@
-import type { Message, Mood, Task } from "../../../../coding-agent/src/extensions/vos/types.ts";
+import type { Message, Mood, Task } from "./types.ts";
 
 export type TimelineItem = { kind: "message"; message: Message } | { kind: "task"; task: Task };
 

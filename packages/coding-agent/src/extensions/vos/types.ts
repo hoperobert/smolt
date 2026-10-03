@@ -6,8 +6,8 @@
  * `types.ts` plus the teammates release's CONTRACT.md); the server calls a vos
  * a "dot" internally, which is why some paths and fields still say so.
  *
- * Types only: the desktop renderer imports this file too, so nothing here may
- * pull in Node.
+ * Types, and one constant: the view bundle imports this file too, so nothing
+ * here may pull in Node.
  */
 
 export type Mood = "idle" | "thinking" | "working" | "needsYou" | "paused" | "celebrating" | "sad";
@@ -34,7 +34,10 @@ export interface Dot {
 	/** Standing rules in the user's words. */
 	rules?: string;
 	pinned?: boolean;
+	/** Folded away in the roster; its routines keep running. */
 	hidden?: boolean;
+	/** The roster section (sidebar group) it is filed under; absent means none. */
+	section?: string;
 }
 
 /** A row of `GET /dots`: the vos plus what it is up to. */
@@ -160,7 +163,18 @@ export interface Rule {
 	vos?: string;
 	source?: "user" | "always-allow";
 	createdAt?: string;
+	/** An approve-in-advance rule lapses here; the server ignores and then drops it. */
+	expiresAt?: string;
 }
+
+/**
+ * How long a yes to an approval holds: this once, or as an allow rule (for that vos) for an hour, today,
+ * or always. Purchases, deletions and account changes always ask, so they only ever get "once".
+ */
+export type ApprovalRemember = "once" | "1h" | "today" | "always";
+
+/** Kinds the server always asks about: a remembered yes would change nothing. */
+export const ALWAYS_ASK_KINDS: readonly ActionKind[] = ["purchase", "deleteData", "accountChange"];
 
 export type Trigger =
 	| { type: "schedule"; rrule: string; timezone: string }
@@ -317,3 +331,95 @@ export interface DeviceKey {
 	createdAt: string;
 	lastUsedAt?: string;
 }
+
+/** Something a vos remembers about the user (`GET /memory`). */
+export interface MemoryNote {
+	id: string;
+	text: string;
+	/** When it was noted. */
+	date?: string;
+	createdAt?: string;
+	updatedAt?: string;
+	/** Which vos wrote it down, when the server says. */
+	vos?: string;
+	source?: string;
+}
+
+export type InboxKind = "approval" | "secret" | "safety" | "handoff" | "question" | "finding" | "failed" | "done";
+export type InboxPriority = "high" | "normal" | "low";
+
+/** One row of the triage inbox across all vos (`GET /inbox`). */
+export interface InboxItem {
+	id: string;
+	/** The vos it is about. */
+	vos: string;
+	kind: InboxKind;
+	title: string;
+	detail?: string;
+	priority: InboxPriority;
+	state: "open" | "done" | "dismissed";
+	ref?: { type: "approval" | "secret" | "safety" | "task" | "message" | "routine"; id: string };
+	date: string;
+}
+
+/** `GET /inbox/count`. */
+export interface InboxCount {
+	open: number;
+	high: number;
+	unread?: number;
+}
+
+/** A connector (plugin) a vos can use: an app it signs in to. */
+export interface Plugin {
+	id: string;
+	name: string;
+	description?: string;
+	connected: boolean;
+	enabled?: boolean;
+	/** What the connection is allowed to do. */
+	scopes?: string[];
+	/** Scopes the connector offers, when the server lists them. */
+	availableScopes?: string[];
+	/** Who it is signed in as. */
+	account?: string;
+	/** The account is known but its sign-in lapsed. */
+	needsSignIn?: boolean;
+	icon?: string;
+}
+
+/** `GET /computer`: whether the user is driving, and a handoff that waits for them. */
+export interface ComputerState {
+	id?: string;
+	userInControl: boolean;
+	/** The pending handoff approval's id: the vos needs the user to take over. */
+	handoffApprovalId?: string;
+	/** Why, in the vos's words (password, 2FA, CAPTCHA). */
+	handoffReason?: string;
+}
+
+/** Where this host's key came from (VOS_API_KEY, the OS keystore, a 0600 file, this process only) or none. */
+export type VosKeySource = "env" | "keychain" | "file" | "memory" | "none";
+
+/** The connection as the view shows it. Never carries the key. */
+export interface VosConnection {
+	connected: boolean;
+	url: string;
+	keySource: VosKeySource;
+	/** Whether a key can be kept beyond this process. */
+	canPersist: boolean;
+	/** The name this host was paired as, when its key came from the phone. */
+	deviceName?: string;
+	error?: string;
+}
+
+/** A pairing as the connect screen shows it. The QR text carries the pairing's code, never a key. */
+export interface VosPairing {
+	id: string;
+	qr: string;
+	short?: string;
+	expiresAt: string;
+	name: string;
+}
+
+/** A view request's answer: the value, or the server's error and status. */
+export type VosCallResult = { ok: true; value: unknown } | { ok: false; error: string; status: number };

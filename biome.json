@@ -16,6 +16,12 @@
 			}
 		}
 	},
+	"overrides": [
+		{
+			"includes": ["packages/coding-agent/**"],
+			"linter": { "domains": { "react": "none" } }
+		}
+	],
 	"formatter": {
 		"enabled": true,
 		"formatWithErrors": false,

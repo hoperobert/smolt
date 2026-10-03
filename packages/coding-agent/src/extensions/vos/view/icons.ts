@@ -1,0 +1,57 @@
+/**
+ * The desktop app's line-icon set, carried into the view so it looks the same.
+ * Icons inherit `currentColor`; size comes from the surrounding classes.
+ */
+
+const STROKE = `fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"`;
+
+const PATHS: Record<string, string> = {
+	// composer
+	attach: `<path ${STROKE} d="M12.5 6.5 7.2 11.8a1.9 1.9 0 0 0 2.7 2.7l5.4-5.4a3.5 3.5 0 0 0-5-5L4.9 9.6a5.1 5.1 0 0 0 7.2 7.2l5-5"/>`,
+	mic: `<rect ${STROKE} x="8" y="2.5" width="5" height="9.5" rx="2.5"/><path ${STROKE} d="M4.75 9.5a5.25 5.25 0 0 0 10.5 0M10 15v3"/>`,
+	send: `<path ${STROKE} d="M10 15.5v-11M5 9.5l5-5 5 5"/>`,
+	stop: `<rect ${STROKE} x="5.5" y="5.5" width="9" height="9" rx="1.75"/>`,
+	// chrome
+	plus: `<path ${STROKE} d="M3.5 10h13M10 3.5v13"/>`,
+	folderAdd: `<path ${STROKE} d="M3 6.5A1.5 1.5 0 0 1 4.5 5h3l1.5 2h6.5A1.5 1.5 0 0 1 17 8.5v6A1.5 1.5 0 0 1 15.5 16h-11A1.5 1.5 0 0 1 3 14.5z"/><path ${STROKE} d="M10 9.5v4M8 11.5h4"/>`,
+	update: `<path ${STROKE} d="M10 4v8m0 0 3-3m-3 3-3-3"/><path ${STROKE} d="M4 14v1.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V14"/>`,
+	folder: `<path ${STROKE} d="M3 6.5A1.5 1.5 0 0 1 4.5 5h3l1.5 2h6.5A1.5 1.5 0 0 1 17 8.5v6A1.5 1.5 0 0 1 15.5 16h-11A1.5 1.5 0 0 1 3 14.5z"/>`,
+	command: `<path ${STROKE} d="M12.5 4 7.5 16"/><path ${STROKE} d="m5 7-3 3 3 3M15 7l3 3-3 3"/>`,
+	newChat: `<path ${STROKE} d="M3.5 10h13M10 3.5v13"/>`,
+	settings: `<path ${STROKE} d="M4 6h12M4 10h12M4 14h12"/><circle ${STROKE} cx="7.5" cy="6" r="1.75"/><circle ${STROKE} cx="12.5" cy="10" r="1.75"/><circle ${STROKE} cx="7.5" cy="14" r="1.75"/>`,
+	cog: `<circle ${STROKE} cx="10" cy="10" r="2.6"/><path ${STROKE} d="M10 2.75v2.1M10 15.15v2.1M17.25 10h-2.1M4.85 10h-2.1M15.13 4.87l-1.49 1.49M6.36 13.64l-1.49 1.49M15.13 15.13l-1.49-1.49M6.36 6.36 4.87 4.87"/><circle ${STROKE} cx="10" cy="10" r="5.4"/>`,
+	// settings nav
+	model: `<rect ${STROKE} x="6.5" y="6.5" width="7" height="7" rx="1.75"/><path ${STROKE} d="M8.25 3.5v3M11.75 3.5v3M8.25 13.5v3M11.75 13.5v3M3.5 8.25h3M3.5 11.75h3M13.5 8.25h3M13.5 11.75h3"/>`,
+	extension: `<rect ${STROKE} x="3.25" y="3.25" width="6" height="6" rx="1.75"/><rect ${STROKE} x="10.75" y="3.25" width="6" height="6" rx="1.75"/><rect ${STROKE} x="3.25" y="10.75" width="6" height="6" rx="1.75"/><rect ${STROKE} x="10.75" y="10.75" width="6" height="6" rx="1.75"/>`,
+	appearance: `<circle ${STROKE} cx="10" cy="10" r="3.75"/><path ${STROKE} d="M10 2.5v1.75M10 15.75v1.75M17.5 10h-1.75M4.25 10H2.5M15.3 4.7l-1.25 1.25M5.95 14.05 4.7 15.3M15.3 15.3l-1.25-1.25M5.95 5.95 4.7 4.7"/>`,
+	key: `<circle ${STROKE} cx="7" cy="12.5" r="3.25"/><path ${STROKE} d="m9.4 10.1 6.6-6.6M13.5 6l2 2M11.5 8l2 2"/>`,
+	info: `<circle ${STROKE} cx="10" cy="10" r="6.75"/><path ${STROKE} d="M10 9.25v4.25"/><circle cx="10" cy="6.6" r="0.95" fill="currentColor"/>`,
+	close: `<path ${STROKE} d="m5.5 5.5 9 9M14.5 5.5l-9 9"/>`,
+	copy: `<rect ${STROKE} x="7" y="7" width="8.5" height="8.5" rx="2"/><path ${STROKE} d="M12.5 4.5h-8a1 1 0 0 0-1 1v8"/>`,
+	check: `<path ${STROKE} d="m4.5 10.5 3.5 3.5 7.5-7.5"/>`,
+	scrollDown: `<path ${STROKE} d="M10 4.5v11M5 10.5l5 5 5-5"/>`,
+	chevron: `<path ${STROKE} d="m7.5 5 5 5-5 5"/>`,
+	trash: `<path ${STROKE} d="M4.5 6h11M8 6V4.5h4V6M6 6l.6 9.5h6.8L14 6"/>`,
+	diff: `<path ${STROKE} d="M6 3.5v6M3 6.5h6M3 15.5h6M11 6.5h6M14 12.5v6M11 15.5h6"/>`,
+	branch: `<circle ${STROKE} cx="6" cy="5" r="2"/><circle ${STROKE} cx="6" cy="15" r="2"/><circle ${STROKE} cx="14" cy="8" r="2"/><path ${STROKE} d="M6 7v6M8 8h2a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2H8"/>`,
+	side: `<rect ${STROKE} x="3" y="4" width="14" height="12" rx="2.5"/><path ${STROKE} d="M12.5 4v12"/>`,
+	sidebar: `<rect ${STROKE} x="3" y="4" width="14" height="12" rx="2.5"/><path ${STROKE} d="M8 4v12"/>`,
+	menu: `<path ${STROKE} d="M3.5 6h13M3.5 10h13M3.5 14h13"/>`,
+	search: `<circle ${STROKE} cx="9" cy="9" r="5"/><path ${STROKE} d="m12.8 12.8 3.7 3.7"/>`,
+	refresh: `<path ${STROKE} d="M15.5 8.5a5.75 5.75 0 1 0 .3 3.2M15.5 4v4.5H11"/>`,
+	edit: `<path ${STROKE} d="M13.5 4.5 15.5 6.5 8 14l-2.8.8.8-2.8Z"/><path ${STROKE} d="M4 16.5h12"/>`,
+	inbox: `<path ${STROKE} d="M3.5 11.5 5.6 5a1.5 1.5 0 0 1 1.4-1h6a1.5 1.5 0 0 1 1.4 1l2.1 6.5v3A1.5 1.5 0 0 1 15 16H5a1.5 1.5 0 0 1-1.5-1.5z"/><path ${STROKE} d="M3.5 11.5h3.75l1 1.75h3.5l1-1.75h3.75"/>`,
+	memory: `<path ${STROKE} d="M7.5 4.5a2.5 2.5 0 0 0-2.5 2.5 2.5 2.5 0 0 0-1 4.5A2.5 2.5 0 0 0 7 15.5h0.5M12.5 4.5A2.5 2.5 0 0 1 15 7a2.5 2.5 0 0 1 1 4.5 2.5 2.5 0 0 1-3 4h-.5M10 4v12"/>`,
+	plug: `<path ${STROKE} d="M7 3.5v3M13 3.5v3M5.5 6.5h9v2.5a4.5 4.5 0 0 1-9 0zM10 13.5v3"/>`,
+	code: `<path ${STROKE} d="m7 6.5-3.5 3.5L7 13.5M13 6.5l3.5 3.5-3.5 3.5"/>`,
+	pin: `<path ${STROKE} d="M8 3.5h4l-.5 4 2.5 2.5H6L8.5 7.5zM10 10v6.5"/>`,
+	hide: `<path ${STROKE} d="M3 10s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><path ${STROKE} d="m4 4 12 12"/>`,
+	hand: `<path ${STROKE} d="M7 10V5.25a1.25 1.25 0 0 1 2.5 0V9.5m0-.5V4.25a1.25 1.25 0 0 1 2.5 0V9.5m0-.75V5.5a1.25 1.25 0 0 1 2.5 0v5.75A5.25 5.25 0 0 1 9.25 16.5 4.5 4.5 0 0 1 5.4 14.3L3.9 11.7a1.2 1.2 0 0 1 2-1.3L7 12"/>`,
+	spinner: `<circle ${STROKE} cx="10" cy="10" r="6.5" stroke-opacity="0.25"/><path ${STROKE} d="M10 3.5a6.5 6.5 0 0 1 6.5 6.5"/>`,
+};
+
+export function icon(name: string): string {
+	const body = PATHS[name];
+	if (!body) return "";
+	return `<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">${body}</svg>`;
+}

@@ -2,42 +2,63 @@
 // tree switches this single line to `from "smolt"`.
 
 import { hostname } from "node:os";
-import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../../core/extensions/types.ts";
 import { deviceName, groupDot, pollPairing, startPairing, VosClient, VosError } from "./client.ts";
-import { type ResolvedVosConfig, readVosFile, resolveVosConfig, writeVosFile } from "./config.ts";
+import { type ResolvedVosConfig, resolveVosConfig, SECRET_DEVICE, SECRET_KEY, saveVosUrl } from "./config.ts";
 import {
 	ago,
 	decisionLabel,
 	describeTrigger,
+	inboxKindLabel,
 	isBusy,
 	kindLabel,
 	moodLabel,
+	rosterSections,
+	sortInbox,
 	sortRoster,
 	unreadTotal,
+	untilLabel,
 } from "./format.ts";
+import { showVosPanel } from "./panel.ts";
 import { encodeQr, qrTerminal } from "./qr.ts";
-import type { Group, Message, PairStart, Roster, RosterDot, VosEvent, VosStatus } from "./types.ts";
+import { type SocketFactory, VosService } from "./service.ts";
+import type { Group, InboxItem, Message, PairStart, Roster, RosterDot, VosEvent, VosStatus } from "./types.ts";
+import { loadViewHtml } from "./view-html.ts";
 
 /**
- * /vos: the user's Vos teammates from the terminal.
+ * Vos: the user's AI teammates, as an extension.
  *
- *   /vos                        roster and unread counts
+ * In graphical front ends it contributes a view (the desktop app's Vos
+ * section): a page built from ./view whose every request is answered here,
+ * by a VosService that holds the key. In the terminal it has commands and a
+ * panel:
+ *
+ *   /vos                        roster (by section) and unread counts
+ *   /vos panel                  inbox, chats, memory and coding agents in an overlay
+ *   /vos inbox                  what needs you, across all vos
  *   /vos chat <name> [message]  send to a vos or group chat and follow the reply; no message shows the latest
+ *   /vos memory <name>          what a vos remembers about you
  *   /vos routines [name]        a vos's routines (main when no name)
+ *   /vos connectors [name]      the apps a vos can use
+ *   /vos code <name> <task>     a coding agent on the vos's computer
  *   /vos skills                 the shared skills library
- *   /vos rules                  auto-review rules
+ *   /vos rules                  auto-review rules and approvals in advance
  *   /vos groups                 group chats
  *   /vos connect                pair with the phone: a QR here, approved in the Vos app
  *
- * The key comes from VOS_API_KEY, or from ~/.smolt/vos.json's `apiKey`,
- * which /vos connect writes when the phone approves a pairing (or the user
- * writes by hand). See config.ts for why the desktop app's encrypted key is
- * not readable here.
+ * The key comes from VOS_API_KEY, or from the host's secret store (the OS
+ * keystore in the desktop app, a 0600 file in the terminal), which pairing
+ * writes. See config.ts.
  */
 
 const SUBCOMMANDS = [
+	{ value: "panel", description: "Inbox, chats, memory and coding agents in an overlay" },
+	{ value: "inbox", description: "What needs you, across all vos" },
 	{ value: "chat", description: "Send to a vos or group and follow the reply" },
+	{ value: "memory", description: "What a vos remembers about you" },
 	{ value: "routines", description: "A vos's routines" },
+	{ value: "connectors", description: "The apps a vos can use" },
+	{ value: "code", description: "Start a coding agent on a vos's computer" },
 	{ value: "skills", description: "The shared skills library" },
 	{ value: "rules", description: "Auto-review rules" },
 	{ value: "groups", description: "Group chats" },
@@ -54,7 +75,13 @@ export interface VosExtensionOptions {
 	pollMs?: number;
 	/** This machine's name, for what the phone shows; tests fix it. */
 	host?: string;
+	/** The live computer view's WebSocket; tests replace it. */
+	socket?: SocketFactory;
 }
+
+/** The view's id, and the settings section's. */
+export const VIEW_ID = "vos";
+export const SETTINGS_VIEW_ID = "vos-settings";
 
 /** A vos or group by name: exact, then prefix, case-insensitive; ids work too. */
 export function findThread(
@@ -101,13 +128,21 @@ export function connectHelp(config: ResolvedVosConfig): string {
 		`export VOS_URL=${config.url}   # optional; this is the default`,
 		"```",
 		"",
-		`The desktop app keeps its own key in ${config.path}, encrypted by the operating system; the TUI cannot read that one, so it pairs on its own.`,
+		"The desktop app keeps its own key with the operating system's keystore; the terminal pairs on its own and keeps its key in a file only you can read.",
 	];
 	if (config.keySource === "env") lines.push("", "VOS_API_KEY is set, so the TUI uses it.");
 	else if (config.apiKey) {
-		lines.push("", `Connected${config.deviceName ? ` as ${config.deviceName}` : ""} (key in ${config.path}).`);
+		lines.push(
+			"",
+			`Connected${config.deviceName ? ` as ${config.deviceName}` : ""} (key kept in the ${config.keySource === "keychain" ? "OS keystore" : "secret store"}).`,
+		);
 	}
 	return lines.join("\n");
+}
+
+function inboxLine(item: InboxItem, names: Map<string, string>): string {
+	const flag = item.priority === "high" ? "**!** " : "";
+	return `- ${flag}**${names.get(item.vos) ?? item.vos}** · ${inboxKindLabel(item.kind)}: ${item.title}${item.detail ? ` (${item.detail})` : ""} · ${ago(item.date)}`;
 }
 
 /** What the transcript says about a pairing; the QR itself is a widget above the prompt. */
@@ -159,8 +194,21 @@ function messageLine(m: Message, threadName: string): string {
 	return `**${who}:** ${m.text}${extra}${attachment}`;
 }
 
+/** A vos by name, or main when no name is given; a group does not count. */
+function vosByName(roster: Roster, name: string): RosterDot | undefined {
+	if (!name.trim()) return roster.dots.find((d) => d.id === "main") ?? roster.dots[0];
+	const thread = findThread(roster, name);
+	return thread?.kind === "vos" ? thread.vos : undefined;
+}
+
+/** A request's params as a record, whatever the view sent. */
+const record = (params: unknown): Record<string, unknown> =>
+	params && typeof params === "object" && !Array.isArray(params) ? (params as Record<string, unknown>) : {};
+const text = (value: unknown): string => (typeof value === "string" ? value : value === undefined ? "" : String(value));
+
 export function createVosExtension(options: VosExtensionOptions = {}) {
 	return function vosExtension(smolt: ExtensionAPI): void {
+		const env = options.env ?? process.env;
 		/** Follows in flight, per thread, so a second send does not double every reply. */
 		const following = new Map<string, AbortController>();
 
@@ -171,8 +219,26 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 		/** The pairing waiting for the phone, if any: a new /vos connect replaces it. */
 		let pairing: AbortController | undefined;
 
-		const clientOr = (ctx: ExtensionCommandContext): VosClient | undefined => {
-			const config = resolveVosConfig(options.env ?? process.env);
+		/**
+		 * The service behind the view, made on first use: a terminal session
+		 * that never opens the view pays nothing for it.
+		 */
+		let service: VosService | undefined;
+		const vos = (): VosService => {
+			service ??= new VosService({
+				secrets: smolt.secrets,
+				post: (event, data) => smolt.postToView(VIEW_ID, event, data),
+				env,
+				fetch: options.fetch,
+				socket: options.socket,
+				pollMs: options.pollMs,
+				host: options.host,
+			});
+			return service;
+		};
+
+		const clientOr = async (ctx: ExtensionCommandContext): Promise<VosClient | undefined> => {
+			const config = await resolveVosConfig(smolt.secrets, env);
 			if (!config.apiKey) {
 				ctx.ui.notify("Vos is not connected. Run /vos connect to pair with your phone.", "warning");
 				return undefined;
@@ -234,7 +300,7 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 		/**
 		 * Pair with the phone: show the QR and the six digits, then poll in the
 		 * background (the session stays usable) until it is approved, declined
-		 * or expires. The device key lands in ~/.smolt/vos.json, owner-only.
+		 * or expires. The device key goes to the secret store.
 		 */
 		const pair = async (config: ResolvedVosConfig, ctx: ExtensionCommandContext): Promise<void> => {
 			pairing?.abort();
@@ -262,12 +328,15 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 							return;
 						}
 						if (result.state === "approved" && result.key) {
-							writeVosFile(
-								{ ...readVosFile(config.path), url: config.url, apiKey: result.key, deviceName: name },
-								config.path,
-							);
+							saveVosUrl(config.url, env);
+							await smolt.secrets.set(SECRET_KEY, result.key);
+							await smolt.secrets.set(SECRET_DEVICE, name);
+							const where =
+								(await smolt.secrets.backend()) === "keychain"
+									? "in your operating system's keystore"
+									: "in a file only you can read";
 							say(
-								`Connected as **${name}**. The device key is saved in ${config.path}, readable only by you; revoke it any time in the Vos app (Settings › Connected devices). Try \`/vos\`.`,
+								`Connected as **${name}**. The device key is kept ${where}; revoke it any time in the Vos app (Settings › Connected devices). Try \`/vos\`.`,
 							);
 							return;
 						}
@@ -293,7 +362,7 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 			const [sub = "", ...restWords] = trimmed.split(/\s+/);
 			const rest = trimmed.slice(sub.length).trim();
 			if (sub === "connect") {
-				const config = resolveVosConfig(options.env ?? process.env);
+				const config = await resolveVosConfig(smolt.secrets, env);
 				if (restWords[0] === "help" || config.keySource === "env") {
 					say(connectHelp(config));
 					return;
@@ -301,19 +370,45 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				await pair(config, ctx);
 				return;
 			}
-			const client = clientOr(ctx);
+			const client = await clientOr(ctx);
 			if (!client) return;
 
 			if (sub === "") {
 				const roster = await client.roster();
-				const { shown, hidden } = sortRoster(roster.dots);
-				const lines = [`## Your vos (${unreadTotal(roster)} unread)`, "", ...shown.map(rosterLine)];
-				if (roster.groups.length) {
-					lines.push("", "**Group chats**", "");
-					for (const g of roster.groups) lines.push(`- ${g.name}${g.unread ? ` · **${g.unread} unread**` : ""}`);
+				const { hidden } = sortRoster(roster.dots);
+				const lines = [`## Your vos (${unreadTotal(roster)} unread)`, ""];
+				for (const section of rosterSections(roster.dots)) {
+					if (section.name) lines.push(`**${section.name}**`, "");
+					lines.push(...section.dots.map(rosterLine), "");
 				}
-				if (hidden.length) lines.push("", `Hidden: ${hidden.map((d) => d.name).join(", ")}`);
-				lines.push("", "`/vos chat <name> <message>` to talk to one.");
+				if (roster.groups.length) {
+					lines.push("**Group chats**", "");
+					for (const g of roster.groups) lines.push(`- ${g.name}${g.unread ? ` · **${g.unread} unread**` : ""}`);
+					lines.push("");
+				}
+				if (hidden.length)
+					lines.push(`Hidden (routines keep running): ${hidden.map((d) => d.name).join(", ")}`, "");
+				lines.push("`/vos chat <name> <message>` to talk to one, `/vos panel` for the inbox.");
+				say(lines.join("\n"));
+				return;
+			}
+
+			if (sub === "panel") {
+				if (ctx.mode !== "tui") {
+					ctx.ui.notify("The Vos panel is a terminal overlay; the desktop app has the Vos view instead.", "info");
+					return;
+				}
+				await showVosPanel(ctx, client);
+				return;
+			}
+
+			if (sub === "inbox") {
+				const [items, roster] = await Promise.all([client.inbox({ state: "open" }), client.roster()]);
+				const names = new Map(roster.dots.map((d) => [d.id, d.name]));
+				const lines = ["## Inbox", ""];
+				if (items.length === 0) lines.push("Nothing needs you.");
+				for (const item of sortInbox(items)) lines.push(inboxLine(item, names));
+				if (items.length) lines.push("", "`/vos panel` to approve, mark done or dismiss.");
 				say(lines.join("\n"));
 				return;
 			}
@@ -348,6 +443,22 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				return;
 			}
 
+			if (sub === "memory") {
+				const roster = await client.roster();
+				const vosDot = vosByName(roster, rest);
+				if (!vosDot) {
+					ctx.ui.notify(`No vos called "${rest}".`, "warning");
+					return;
+				}
+				const notes = await client.memory(vosDot.id);
+				const lines = [`## What ${vosDot.name} remembers`, ""];
+				if (notes.length === 0) lines.push("Nothing yet.");
+				for (const note of notes) lines.push(`- ${note.text}`);
+				lines.push("", "Add, edit or forget notes in `/vos panel` or the desktop app's Memory tab.");
+				say(lines.join("\n"));
+				return;
+			}
+
 			if (sub === "routines") {
 				const roster = await client.roster();
 				const thread = restWords.length ? findThread(roster, rest) : undefined;
@@ -355,14 +466,14 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 					ctx.ui.notify(`No vos called "${rest}".`, "warning");
 					return;
 				}
-				const vos =
+				const vosDot =
 					thread?.kind === "vos" ? thread.vos : (roster.dots.find((d) => d.id === "main") ?? roster.dots[0]);
-				if (!vos) {
+				if (!vosDot) {
 					ctx.ui.notify("No vos yet.", "warning");
 					return;
 				}
-				const routines = await client.routines(vos.id);
-				const lines = [`## ${vos.name}'s routines`, ""];
+				const routines = await client.routines(vosDot.id);
+				const lines = [`## ${vosDot.name}'s routines`, ""];
 				if (routines.length === 0) lines.push("None yet.");
 				for (const r of routines) {
 					const state = r.enabled ? "on" : r.pausedReason ? `paused: ${r.pausedReason}` : "off";
@@ -374,6 +485,43 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 					lines.push(`- **${r.name}** (${state}): ${describeTrigger(r.trigger)}${next}${last}`);
 				}
 				say(lines.join("\n"));
+				return;
+			}
+
+			if (sub === "connectors") {
+				const roster = await client.roster();
+				const vosDot = vosByName(roster, rest);
+				const plugins = await client.plugins(vosDot?.id);
+				const lines = ["## Connectors", ""];
+				if (plugins.length === 0) lines.push("None available.");
+				for (const p of [...plugins].sort(
+					(a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name),
+				)) {
+					const state = p.connected ? `connected${p.account ? ` as ${p.account}` : ""}` : "not connected";
+					const scopes = p.connected && p.scopes?.length ? ` · ${p.scopes.join(", ")}` : "";
+					lines.push(`- **${p.name}**: ${state}${scopes}`);
+				}
+				lines.push(
+					"",
+					"Connect or disconnect in the desktop app's Connectors tab (sign-in opens in your browser).",
+				);
+				say(lines.join("\n"));
+				return;
+			}
+
+			if (sub === "code") {
+				const roster = await client.roster();
+				const { name, message } = splitNameAndMessage(roster, rest);
+				const vosDot = vosByName(roster, name);
+				if (!vosDot || !message) {
+					ctx.ui.notify("Usage: /vos code <name> <what to build or fix> [in owner/repo]", "warning");
+					return;
+				}
+				const repo = /\bin\s+([\w.-]+\/[\w.-]+)\s*$/.exec(message)?.[1];
+				const task = await client.startCoding(vosDot.id, message, repo);
+				say(
+					`**${vosDot.name}** started a coding agent${repo ? ` on ${repo}` : ""}: ${task.title || message}. It follows ${vosDot.name}'s rules and asks for approvals as usual.`,
+				);
 				return;
 			}
 
@@ -398,8 +546,9 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				for (const r of rules) {
 					const who = r.vos ? ` (only ${names.get(r.vos) ?? r.vos})` : "";
 					const match = r.match ? `, ${r.match}` : "";
+					const until = r.expiresAt ? ` (${untilLabel(r.expiresAt)})` : "";
 					lines.push(
-						`- **${decisionLabel(r.decision)}**: ${kindLabel(r.kind)} on ${r.site || "any site"}${match}${who}${r.note ? `: ${r.note}` : ""}`,
+						`- **${decisionLabel(r.decision)}**${until}: ${kindLabel(r.kind)} on ${r.site || "any site"}${match}${who}${r.note ? `: ${r.note}` : ""}`,
 					);
 				}
 				say(lines.join("\n"));
@@ -419,11 +568,14 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 				return;
 			}
 
-			ctx.ui.notify(`Unknown: /vos ${sub}. Try /vos, chat, routines, skills, rules, groups or connect.`, "warning");
+			ctx.ui.notify(
+				`Unknown: /vos ${sub}. Try /vos, panel, inbox, chat, memory, routines, connectors, code, skills, rules, groups or connect.`,
+				"warning",
+			);
 		};
 
 		smolt.registerCommand("vos", {
-			description: "Your Vos teammates: roster, chat, routines, skills, rules, groups",
+			description: "Your Vos teammates: roster, inbox, chat, memory, routines, connectors, coding agents",
 			getArgumentCompletions: (prefix) => {
 				if (prefix.includes(" ")) return null;
 				const items = SUBCOMMANDS.filter((s) => s.value.startsWith(prefix)).map((s) => ({
@@ -450,10 +602,95 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 			},
 		});
 
+		// ---------------------------------------------------------------- the view
+
+		smolt.registerView({ id: VIEW_ID, title: "Vos", icon: "◉", location: "sidebar", order: -10, html: loadViewHtml });
+		smolt.registerView({
+			id: SETTINGS_VIEW_ID,
+			title: "Vos",
+			location: "settings",
+			order: -10,
+			html: loadViewHtml,
+		});
+
+		const handle = async (method: string, params: unknown): Promise<unknown> => {
+			const p = record(params);
+			const s = vos();
+			switch (method) {
+				case "status":
+					return s.status();
+				case "connect":
+					return s.connect(text(p.url), text(p.key));
+				case "disconnect":
+					return s.disconnect();
+				case "pairStart":
+					return s.pairStart(text(p.url));
+				case "pairCancel":
+					s.pairCancel();
+					return null;
+				case "call":
+					return s.call(text(p.method), text(p.path), p.body, typeof p.dot === "string" ? p.dot : undefined);
+				case "secret":
+					return s.answerSecret(text(p.dot), text(p.id), typeof p.value === "string" ? p.value : "");
+				case "file":
+					return s.file(text(p.path));
+				case "watch":
+					await s.watch(text(p.dot));
+					return null;
+				case "unwatch":
+					s.unwatch(text(p.dot));
+					return null;
+				case "liveOpen":
+					return s.liveOpen(text(p.dot));
+				case "liveInput":
+					return s.liveInput(text(p.dot), p.input);
+				case "liveClose":
+					s.liveClose(text(p.dot));
+					return null;
+				case "inboxRefresh":
+					s.pokeInbox(0);
+					return null;
+				default:
+					throw new Error(`Unknown Vos request: ${method}`);
+			}
+		};
+		smolt.onViewRequest(VIEW_ID, (method, params) => handle(method, params));
+		smolt.onViewRequest(SETTINGS_VIEW_ID, (method, params) => handle(method, params));
+
+		/** Names for notifications, read when the first one needs them. */
+		let names: Map<string, string> | undefined;
+		const nameOf = async (id: string): Promise<string> => {
+			if (!names?.has(id)) {
+				const client = await vos().current();
+				const roster = await client?.roster().catch(() => undefined);
+				if (roster) names = new Map(roster.dots.map((d) => [d.id, d.name]));
+			}
+			return names?.get(id) ?? "Vos";
+		};
+
+		// A front end that shows views keeps the sidebar badge current and is
+		// told, natively, when something urgent lands in the inbox.
+		smolt.on("views_attached", (_event, ctx: ExtensionContext) => {
+			vos().watchInbox(
+				(count) => smolt.setViewBadge(VIEW_ID, (count?.unread ?? count?.open) || undefined),
+				(item) => {
+					void nameOf(item.vos).then((name) =>
+						ctx.ui.notify(`${name}: ${item.title}`, "info", {
+							native: true,
+							title: `${name} needs you`,
+							openView: VIEW_ID,
+						}),
+					);
+				},
+			);
+		});
+
 		smolt.on("session_shutdown", async () => {
 			pairing?.abort();
 			for (const controller of following.values()) controller.abort();
 			following.clear();
+			service?.dispose();
+			service = undefined;
 		});
 	};
 }

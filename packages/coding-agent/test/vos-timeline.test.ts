@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Message, Task } from "../../coding-agent/src/extensions/vos/types.ts";
-import { taskIsLive, threadTimeline } from "../src/renderer/state/vos-timeline.ts";
+import { taskIsLive, threadTimeline } from "../src/extensions/vos/timeline.ts";
+import type { Message, Task } from "../src/extensions/vos/types.ts";
 
 const message = (id: string, date: string, extra: Partial<Message> = {}): Message =>
 	({ id, role: "vos", text: id, date, viaCall: false, ...extra }) as Message;

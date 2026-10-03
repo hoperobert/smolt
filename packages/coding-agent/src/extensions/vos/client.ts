@@ -1,12 +1,18 @@
 import { SseParser } from "./sse.ts";
 import type {
 	Approval,
+	ApprovalRemember,
+	ComputerState,
 	Dot,
 	Group,
+	InboxCount,
+	InboxItem,
+	MemoryNote,
 	Message,
 	PairKind,
 	PairPoll,
 	PairStart,
+	Plugin,
 	Roster,
 	Routine,
 	RoutineRun,
@@ -15,14 +21,16 @@ import type {
 	SecretRequest,
 	Share,
 	Skill,
+	Task,
 	TeachSession,
 	VosEvent,
 	VosState,
 } from "./types.ts";
 
 /**
- * A client for the Vos API, shared by the TUI's /vos commands and the desktop
- * app's main process (which holds the key so the window never sees it).
+ * A client for the Vos API, used by the extension's Node side: the TUI's /vos
+ * commands and the service behind the desktop view (which holds the key so
+ * the view never sees it).
  *
  * Plain fetch, no Node imports: it runs anywhere fetch and streams do.
  *
@@ -157,8 +165,34 @@ export type RuleInput = Omit<Rule, "id" | "createdAt" | "source">;
 /** A rule edit; null clears `match` or `vos`. */
 export type RulePatch = Partial<Omit<RuleInput, "match" | "vos">> & { match?: string | null; vos?: string | null };
 export type DotPatch = Partial<
-	Pick<Dot, "name" | "label" | "personality" | "job" | "rules" | "look" | "pinned" | "hidden">
+	Pick<Dot, "name" | "label" | "personality" | "job" | "rules" | "look" | "pinned" | "hidden" | "section">
 >;
+
+const asList = <T>(value: unknown, key: string): T[] =>
+	Array.isArray(value) ? (value as T[]) : (((value as Record<string, unknown> | null)?.[key] as T[]) ?? []);
+
+/**
+ * `GET /computer` as the clients read it. The contract names `userInControl`
+ * and "the pending handoff approval id"; servers have spelled the latter a few
+ * ways, so each is accepted here and nowhere else has to care.
+ */
+export function readComputerState(raw: unknown): ComputerState {
+	const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+	const handoff = (value.handoff && typeof value.handoff === "object" ? value.handoff : {}) as Record<string, unknown>;
+	const id =
+		[value.handoffApprovalId, value.pendingHandoff, value.handoffId, handoff.approvalId, handoff.id].find(
+			(candidate): candidate is string => typeof candidate === "string" && candidate !== "",
+		) ?? undefined;
+	const reason = [value.handoffReason, handoff.reason, handoff.title].find(
+		(candidate): candidate is string => typeof candidate === "string" && candidate !== "",
+	);
+	return {
+		...(typeof value.id === "string" ? { id: value.id } : {}),
+		userInControl: value.userInControl === true,
+		...(id ? { handoffApprovalId: id } : {}),
+		...(reason ? { handoffReason: reason } : {}),
+	};
+}
 
 export class VosClient {
 	readonly baseUrl: string;
@@ -271,8 +305,103 @@ export class VosClient {
 	stop(dot: string): Promise<unknown> {
 		return this.request("POST", "/stop", { dot });
 	}
-	answerApproval(dot: string, id: string, decision: "approve" | "deny" | "always"): Promise<Approval> {
-		return this.request("POST", `/approvals/${encodeURIComponent(id)}`, { dot, body: { decision } });
+	/** `remember` other than "once" also writes an allow rule (for an hour, today, or always). */
+	answerApproval(
+		dot: string,
+		id: string,
+		decision: "approve" | "deny" | "always",
+		remember?: ApprovalRemember,
+	): Promise<Approval> {
+		return this.request("POST", `/approvals/${encodeURIComponent(id)}`, {
+			dot,
+			body: { decision, ...(remember && decision === "approve" ? { remember } : {}) },
+		});
+	}
+
+	// ------------------------------------------------------------ memory (per vos)
+
+	async memory(dot: string): Promise<MemoryNote[]> {
+		return asList<MemoryNote>(await this.request<unknown>("GET", "/memory", { dot }), "memory");
+	}
+	async addMemory(dot: string, text: string): Promise<MemoryNote> {
+		const value = await this.request<MemoryNote | { note: MemoryNote }>("POST", "/memory", { dot, body: { text } });
+		return "note" in value ? value.note : value;
+	}
+	async editMemory(dot: string, id: string, text: string): Promise<MemoryNote> {
+		const value = await this.request<MemoryNote | { note: MemoryNote }>(
+			"PATCH",
+			`/memory/${encodeURIComponent(id)}`,
+			{
+				dot,
+				body: { text },
+			},
+		);
+		return "note" in value ? value.note : value;
+	}
+	deleteMemory(dot: string, id: string): Promise<unknown> {
+		return this.request("DELETE", `/memory/${encodeURIComponent(id)}`, { dot });
+	}
+
+	// ------------------------------------------------------------ inbox (across all vos)
+
+	async inbox(options: { state?: "open" | "all"; vos?: string } = {}): Promise<InboxItem[]> {
+		const query = new URLSearchParams();
+		if (options.state) query.set("state", options.state);
+		if (options.vos) query.set("vos", options.vos);
+		const suffix = query.size ? `?${query.toString()}` : "";
+		return asList<InboxItem>(await this.request<unknown>("GET", `/inbox${suffix}`), "items");
+	}
+	async inboxCount(): Promise<InboxCount> {
+		const value = await this.request<Partial<InboxCount>>("GET", "/inbox/count");
+		return {
+			open: Number(value?.open ?? 0),
+			high: Number(value?.high ?? 0),
+			...(typeof value?.unread === "number" ? { unread: value.unread } : {}),
+		};
+	}
+	inboxDone(id: string): Promise<InboxItem> {
+		return this.request("POST", `/inbox/${encodeURIComponent(id)}/done`);
+	}
+	inboxDismiss(id: string): Promise<InboxItem> {
+		return this.request("POST", `/inbox/${encodeURIComponent(id)}/dismiss`);
+	}
+	inboxRead(): Promise<{ unread: number }> {
+		return this.request("POST", "/inbox/read");
+	}
+
+	// ------------------------------------------------------------ connectors (plugins)
+
+	async plugins(dot?: string): Promise<Plugin[]> {
+		return asList<Plugin>(await this.request<unknown>("GET", "/plugins", { dot }), "plugins");
+	}
+	/** Starts a sign-in; the URL is for the user's browser. */
+	connectPlugin(id: string, dot?: string): Promise<{ url?: string }> {
+		return this.request("POST", `/plugins/${encodeURIComponent(id)}/connect`, { dot, body: {} });
+	}
+	disconnectPlugin(id: string, dot?: string): Promise<unknown> {
+		return this.request("POST", `/plugins/${encodeURIComponent(id)}/disconnect`, { dot, body: {} });
+	}
+	updatePlugin(id: string, patch: { scopes?: string[]; enabled?: boolean }, dot?: string): Promise<Plugin> {
+		return this.request("PATCH", `/plugins/${encodeURIComponent(id)}`, { dot, body: patch });
+	}
+
+	// ------------------------------------------------------------ the computer: takeover and coding agents
+
+	async computer(dot: string): Promise<ComputerState> {
+		return readComputerState(await this.request<unknown>("GET", "/computer", { dot }));
+	}
+	takeover(dot: string): Promise<unknown> {
+		return this.request("POST", "/computer/takeover", { dot, body: {} });
+	}
+	handback(dot: string): Promise<unknown> {
+		return this.request("POST", "/computer/handback", { dot, body: {} });
+	}
+	computerInput(dot: string, input: Record<string, unknown>): Promise<unknown> {
+		return this.request("POST", "/computer/input", { dot, body: input });
+	}
+	/** The vos starts a coding agent on its computer; it runs as a task like any other. */
+	startCoding(dot: string, task: string, repo?: string): Promise<Task> {
+		return this.request("POST", "/code", { dot, body: { task, ...(repo ? { repo } : {}) } });
 	}
 
 	// ------------------------------------------------------------ routines (per vos)

@@ -2,26 +2,66 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import type { ExtensionAPI } from "../src/core/extensions/types.ts";
-import { checkApiPath, groupDot, normalizeBaseUrl, VosClient, VosError } from "../src/extensions/vos/client.ts";
+import type {
+	ExtensionAPI,
+	ExtensionSecrets,
+	ExtensionViewDefinition,
+	ExtensionViewRequestHandler,
+} from "../src/core/extensions/types.ts";
+import {
+	checkApiPath,
+	groupDot,
+	normalizeBaseUrl,
+	readComputerState,
+	VosClient,
+	VosError,
+} from "../src/extensions/vos/client.ts";
 import { readVosFile, resolveVosConfig, writeVosFile } from "../src/extensions/vos/config.ts";
 import {
 	describeTrigger,
 	elapsed,
+	expiryFor,
 	filterSkills,
 	insertMention,
 	linkify,
 	mentionQuery,
+	rosterSections,
 	rruleToSchedule,
+	ruleExpired,
 	scheduleToRrule,
+	sectionNames,
 	slashQuery,
+	sortInbox,
 	sortRoster,
 	unreadTotal,
+	untilLabel,
 	vosColor,
 } from "../src/extensions/vos/format.ts";
-import { createVosExtension, findThread, splitNameAndMessage } from "../src/extensions/vos/index.ts";
+import {
+	createVosExtension,
+	findThread,
+	SETTINGS_VIEW_ID,
+	splitNameAndMessage,
+	VIEW_ID,
+} from "../src/extensions/vos/index.ts";
+import { homeItems, inboxActions } from "../src/extensions/vos/panel.ts";
 import { SseParser } from "../src/extensions/vos/sse.ts";
-import type { Roster, RosterDot, Skill } from "../src/extensions/vos/types.ts";
+import type { InboxItem, Roster, RosterDot, Skill } from "../src/extensions/vos/types.ts";
+
+function memorySecrets(): ExtensionSecrets & { values: Map<string, string> } {
+	const values = new Map<string, string>();
+	return {
+		values,
+		get: async (key) => values.get(key),
+		set: async (key, value) => {
+			values.set(key, value);
+		},
+		delete: async (key) => {
+			values.delete(key);
+		},
+		backend: async () => "file",
+	};
+}
 
 const dot = (id: string, name: string, extra: Partial<RosterDot> = {}): RosterDot => ({
 	id,
@@ -251,15 +291,22 @@ describe("config", () => {
 	});
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-	test("env beats the file; a desktop-only file is reported, not read", () => {
+	test("env beats the secret store; the desktop's encrypted key is not read; a file key migrates", async () => {
 		const path = join(dir, "vos.json");
 		writeVosFile({ url: "https://mine.example/v1", encryptedKey: "AAAA" }, path);
 		const env = { SMOLT_VOS_CONFIG: path };
-		expect(resolveVosConfig(env)).toMatchObject({ url: "https://mine.example", desktopOnly: true });
-		expect(resolveVosConfig(env).apiKey).toBeUndefined();
-		expect(resolveVosConfig({ ...env, VOS_API_KEY: " k1 " })).toMatchObject({ apiKey: "k1", keySource: "env" });
+		const secrets = memorySecrets();
+		expect(await resolveVosConfig(secrets, env)).toMatchObject({ url: "https://mine.example", keySource: "none" });
+		expect((await resolveVosConfig(secrets, env)).apiKey).toBeUndefined();
+		expect(await resolveVosConfig(secrets, { ...env, VOS_API_KEY: " k1 " })).toMatchObject({
+			apiKey: "k1",
+			keySource: "env",
+		});
 		writeVosFile({ ...readVosFile(path), apiKey: "k2" }, path);
-		expect(resolveVosConfig(env)).toMatchObject({ apiKey: "k2", keySource: "file" });
+		expect(await resolveVosConfig(secrets, env)).toMatchObject({ apiKey: "k2", keySource: "file" });
+		expect(secrets.values.get("apiKey")).toBe("k2");
+		expect(readVosFile(path).apiKey).toBeUndefined();
+		expect(readVosFile(path).encryptedKey).toBe("AAAA");
 		if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
 
@@ -285,22 +332,47 @@ describe("/vos command", () => {
 	function harness(fetchImpl: typeof fetch, env: NodeJS.ProcessEnv) {
 		const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
 		const said: string[] = [];
-		const notes: string[] = [];
+		const notes: { text: string; options?: unknown }[] = [];
 		const statuses: (string | undefined)[] = [];
+		const views = new Map<string, ExtensionViewDefinition>();
+		const handlers = new Map<string, ExtensionViewRequestHandler>();
+		const events = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+		const posted: { view: string; event: string; data: unknown }[] = [];
+		const badges = new Map<string, number | string | undefined>();
+		const secrets = memorySecrets();
 		const smolt = {
 			registerCommand: (name: string, options: { handler: (args: string, ctx: unknown) => Promise<void> }) =>
 				commands.set(name, options),
 			sendMessage: (message: { content: string }) => said.push(message.content),
-			on: () => {},
+			on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => events.set(event, handler),
+			registerView: (view: ExtensionViewDefinition) => views.set(view.id, view),
+			onViewRequest: (id: string, handler: ExtensionViewRequestHandler) => handlers.set(id, handler),
+			postToView: (view: string, event: string, data: unknown) => posted.push({ view, event, data }),
+			setViewBadge: (view: string, badge: number | string | undefined) => badges.set(view, badge),
+			secrets,
 		} as unknown as ExtensionAPI;
 		createVosExtension({ env, fetch: fetchImpl })(smolt);
 		const ctx = {
+			mode: "tui",
 			ui: {
-				notify: (text: string) => notes.push(text),
+				notify: (text: string, _type?: string, options?: unknown) => notes.push({ text, options }),
 				setStatus: (_key: string, text: string | undefined) => statuses.push(text),
 			},
 		};
-		return { run: (args: string) => commands.get("vos")!.handler(args, ctx), said, notes, statuses };
+		return {
+			run: (args: string) => commands.get("vos")!.handler(args, ctx),
+			request: (method: string, params?: unknown) => handlers.get(VIEW_ID)!(method, params, ctx as never),
+			attach: () => events.get("views_attached")?.({ type: "views_attached" }, ctx),
+			shutdown: () => events.get("session_shutdown")?.({ type: "session_shutdown" }, ctx),
+			said,
+			notes,
+			statuses,
+			views,
+			handlers,
+			posted,
+			badges,
+			secrets,
+		};
 	}
 
 	test("without a key it points at /vos connect, whose help explains the API-key way", async () => {
@@ -309,7 +381,7 @@ describe("/vos command", () => {
 		});
 		await h.run("");
 		expect(h.said).toEqual([]);
-		expect(h.notes[0]).toContain("/vos connect");
+		expect(h.notes[0]?.text).toContain("/vos connect");
 		await h.run("connect help");
 		expect(h.said[0]).toContain("VOS_API_KEY");
 	});
@@ -348,7 +420,7 @@ describe("/vos command", () => {
 		await h.run("");
 		expect(h.said[0]).toContain("Your vos (6 unread)");
 		expect(h.said[0]).toContain("**Ada Lovelace** (Research) [pinned]");
-		expect(h.said[0]).toContain("Hidden: Old");
+		expect(h.said[0]).toContain("Hidden (routines keep running): Old");
 
 		await h.run("chat launch crew hi all");
 		await new Promise((resolve) => setTimeout(resolve, 20));
@@ -356,5 +428,248 @@ describe("/vos command", () => {
 		expect(h.said).toContain("**Ada Lovelace:** On it.");
 		expect(h.statuses).toContain("Launch crew: Reading");
 		expect(h.statuses.at(-1)).toBeUndefined();
+	});
+
+	test("registers the sidebar and settings views; their requests reach the service, never the key", async () => {
+		const seen: { url: string; headers: Record<string, string> }[] = [];
+		const fetchImpl = (async (url: string, init: RequestInit = {}) => {
+			seen.push({ url, headers: (init.headers ?? {}) as Record<string, string> });
+			return new Response(JSON.stringify(roster));
+		}) as typeof fetch;
+		const h = harness(fetchImpl, { SMOLT_VOS_CONFIG: join(tmpdir(), `vos-none-${Date.now()}.json`) });
+		expect([...h.views.keys()]).toEqual([VIEW_ID, SETTINGS_VIEW_ID]);
+		expect(h.views.get(VIEW_ID)).toMatchObject({ location: "sidebar", title: "Vos" });
+		expect(h.views.get(SETTINGS_VIEW_ID)).toMatchObject({ location: "settings" });
+		expect(typeof h.views.get(VIEW_ID)?.html).toBe("function");
+		expect(h.handlers.has(SETTINGS_VIEW_ID)).toBe(true);
+
+		expect(await h.request("status")).toMatchObject({ connected: false, keySource: "none" });
+		const status = await h.request("connect", { url: "https://vos.test", key: "secret-k" });
+		expect(status).toMatchObject({ connected: true, keySource: "file" });
+		expect(h.secrets.values.get("apiKey")).toBe("secret-k");
+		expect(JSON.stringify(h.posted)).not.toContain("secret-k");
+		const result = await h.request("call", { method: "GET", path: "/dots" });
+		expect(result).toMatchObject({ ok: true, value: { dots: expect.any(Array) } });
+		expect(seen.at(-1)?.headers.authorization).toBe("Bearer secret-k");
+		await expect(h.request("nope")).rejects.toThrow("Unknown Vos request");
+		await h.shutdown();
+	});
+
+	test("with views attached, the inbox drives the badge and a native notification for new urgent items", async () => {
+		const items: InboxItem[] = [];
+		const fetchImpl = (async (url: string) => {
+			const path = new URL(url).pathname;
+			if (path === "/v1/inbox/count")
+				return new Response(JSON.stringify({ open: items.length, high: items.length }));
+			if (path === "/v1/inbox") return new Response(JSON.stringify(items));
+			return new Response(JSON.stringify(roster));
+		}) as typeof fetch;
+		const h = harness(fetchImpl, { VOS_API_KEY: "k", SMOLT_VOS_CONFIG: join(tmpdir(), "none.json") });
+		h.attach();
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(h.badges.get(VIEW_ID)).toBeUndefined();
+		items.push({
+			id: "i1",
+			vos: "r1",
+			kind: "handoff",
+			title: "Needs a 2FA code",
+			priority: "high",
+			state: "open",
+			date: "2026-10-03T10:00:00Z",
+		});
+		await h.request("inboxRefresh");
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		expect(h.badges.get(VIEW_ID)).toBe(1);
+		expect(h.notes.at(-1)).toEqual({
+			text: "Ada Lovelace: Needs a 2FA code",
+			options: { native: true, title: "Ada Lovelace needs you", openView: VIEW_ID },
+		});
+		await h.shutdown();
+	});
+
+	test("/vos inbox, memory, connectors and code", async () => {
+		const bodies: { path: string; body: unknown; dot?: string }[] = [];
+		const fetchImpl = (async (url: string, init: RequestInit = {}) => {
+			const path = new URL(url).pathname;
+			const headers = (init.headers ?? {}) as Record<string, string>;
+			if (init.body) bodies.push({ path, body: JSON.parse(String(init.body)), dot: headers["x-vos-dot"] });
+			if (path === "/v1/dots") return new Response(JSON.stringify(roster));
+			if (path === "/v1/inbox")
+				return new Response(
+					JSON.stringify([
+						{
+							id: "a",
+							vos: "r1",
+							kind: "finding",
+							title: "Paper found",
+							priority: "low",
+							state: "open",
+							date: "2026-10-03T09:00:00Z",
+						},
+						{
+							id: "b",
+							vos: "main",
+							kind: "approval",
+							title: "Send the invoice?",
+							priority: "high",
+							state: "open",
+							date: "2026-10-03T08:00:00Z",
+						},
+					]),
+				);
+			if (path === "/v1/memory") return new Response(JSON.stringify([{ id: "n1", text: "Prefers mornings" }]));
+			if (path === "/v1/plugins")
+				return new Response(
+					JSON.stringify([{ id: "gh", name: "GitHub", connected: true, account: "ada", scopes: ["repo"] }]),
+				);
+			if (path === "/v1/code") return new Response(JSON.stringify({ id: "t1", title: "Fix the build" }));
+			return new Response("{}", { status: 404 });
+		}) as typeof fetch;
+		const h = harness(fetchImpl, { VOS_API_KEY: "k", SMOLT_VOS_CONFIG: join(tmpdir(), "none.json") });
+		await h.run("inbox");
+		expect(h.said.at(-1)).toMatch(
+			/\*\*!\*\* \*\*Vos\*\* · Approval: Send the invoice\?[\s\S]*Ada Lovelace\*\* · Finding/,
+		);
+		await h.run("memory ada");
+		expect(h.said.at(-1)).toContain("Prefers mornings");
+		await h.run("connectors");
+		expect(h.said.at(-1)).toContain("**GitHub**: connected as ada · repo");
+		await h.run("code Ada Lovelace fix the build in acme/site");
+		expect(bodies.at(-1)).toEqual({
+			path: "/v1/code",
+			body: { task: "fix the build in acme/site", repo: "acme/site" },
+			dot: "r1",
+		});
+		expect(h.said.at(-1)).toContain("started a coding agent on acme/site");
+	});
+});
+
+describe("Vos additions", () => {
+	test("sections: pinned, then named sections, then the rest; hidden left out", () => {
+		const dots = [
+			dot("main", "Vos"),
+			dot("a", "Ada", { section: "Research" }),
+			dot("b", "Bo", { section: "Clients", pinned: true }),
+			dot("c", "Cy", { section: "Clients" }),
+			dot("h", "Hid", { section: "Research", hidden: true }),
+		];
+		expect(rosterSections(dots).map((s) => [s.name, s.dots.map((d) => d.id)])).toEqual([
+			["Pinned", ["b"]],
+			["Clients", ["c"]],
+			["Research", ["a"]],
+			["Other", ["main"]],
+		]);
+		expect(rosterSections([dot("main", "Vos")])).toEqual([
+			{ name: null, dots: [expect.objectContaining({ id: "main" })] },
+		]);
+		expect(sectionNames(dots)).toEqual(["Clients", "Research"]);
+	});
+
+	test("inbox order and the terminal's actions per item", () => {
+		const item = (
+			id: string,
+			priority: InboxItem["priority"],
+			date: string,
+			extra: Partial<InboxItem> = {},
+		): InboxItem => ({
+			id,
+			vos: "main",
+			kind: "question",
+			title: id,
+			priority,
+			state: "open",
+			date,
+			...extra,
+		});
+		const sorted = sortInbox([
+			item("low", "low", "2026-10-03T12:00:00Z"),
+			item("old-high", "high", "2026-10-01T00:00:00Z"),
+			item("new-high", "high", "2026-10-02T00:00:00Z"),
+			item("done", "high", "2026-10-04T00:00:00Z", { state: "done" }),
+		]);
+		expect(sorted.map((i) => i.id)).toEqual(["new-high", "old-high", "low", "done"]);
+		const approval = item("ap", "high", "", { kind: "approval", ref: { type: "approval", id: "a1" } });
+		expect(inboxActions(approval).map((a) => a.value)).toEqual([
+			"approve:once",
+			"approve:1h",
+			"approve:today",
+			"deny",
+			"done",
+			"dismiss",
+			"vos:main",
+			"\0back",
+		]);
+		expect(inboxActions(item("q", "normal", "", { state: "done" })).map((a) => a.value)).toEqual([
+			"vos:main",
+			"\0back",
+		]);
+		expect(homeItems(roster, 2).map((i) => i.value)).toEqual(["inbox", "vos:r1", "vos:main", "group:g1"]);
+	});
+
+	test("approve-in-advance expiries", () => {
+		const now = new Date(2026, 9, 3, 10, 15).getTime();
+		expect(expiryFor("1h", now)).toBe(new Date(now + 3_600_000).toISOString());
+		expect(new Date(expiryFor("today", now) ?? "").getHours()).toBe(23);
+		expect(expiryFor("always", now)).toBeUndefined();
+		expect(expiryFor("once", now)).toBeUndefined();
+		expect(ruleExpired({ expiresAt: new Date(now - 1).toISOString() }, now)).toBe(true);
+		expect(ruleExpired({}, now)).toBe(false);
+		expect(untilLabel(new Date(2026, 9, 3, 14, 30).toISOString(), now)).toBe("until 14:30");
+		expect(untilLabel(new Date(2026, 9, 4, 9, 0).toISOString(), now)).toBe("until tomorrow 09:00");
+	});
+
+	test("client: memory, inbox, approvals with remember, connectors, computer, code", async () => {
+		const calls: { method: string; url: string; body?: unknown; dot?: string }[] = [];
+		const answers: Record<string, unknown> = {
+			"GET /v1/memory": { memory: [{ id: "n1", text: "t" }] },
+			"PATCH /v1/memory/n1": { note: { id: "n1", text: "u" } },
+			"GET /v1/inbox": [{ id: "i1" }],
+			"GET /v1/inbox/count": { open: 3, high: 1 },
+			"GET /v1/computer": { userInControl: false, handoff: { approvalId: "ap9", reason: "2FA code" } },
+			"POST /v1/plugins/gh/connect": { url: "https://github.com/login/oauth" },
+		};
+		const client = new VosClient({
+			baseUrl: "https://vos.test",
+			apiKey: "k",
+			fetch: (async (url: string, init: RequestInit = {}) => {
+				const parsed = new URL(url);
+				const method = init.method ?? "GET";
+				calls.push({
+					method,
+					url: `${parsed.pathname}${parsed.search}`,
+					body: init.body ? JSON.parse(String(init.body)) : undefined,
+					dot: (init.headers as Record<string, string>)["x-vos-dot"],
+				});
+				return new Response(JSON.stringify(answers[`${method} ${parsed.pathname}`] ?? {}));
+			}) as typeof fetch,
+		});
+		expect(await client.memory("ada")).toEqual([{ id: "n1", text: "t" }]);
+		expect(await client.editMemory("ada", "n1", "u")).toEqual({ id: "n1", text: "u" });
+		expect(calls.at(-1)).toMatchObject({ method: "PATCH", body: { text: "u" }, dot: "ada" });
+		expect(await client.inbox({ state: "all", vos: "ada" })).toEqual([{ id: "i1" }]);
+		expect(calls.at(-1)?.url).toBe("/v1/inbox?state=all&vos=ada");
+		expect(calls.at(-1)?.dot).toBeUndefined();
+		expect(await client.inboxCount()).toEqual({ open: 3, high: 1 });
+		await client.answerApproval("ada", "ap1", "approve", "1h");
+		expect(calls.at(-1)).toMatchObject({ url: "/v1/approvals/ap1", body: { decision: "approve", remember: "1h" } });
+		await client.answerApproval("ada", "ap1", "deny", "1h");
+		expect(calls.at(-1)?.body).toEqual({ decision: "deny" });
+		expect(await client.connectPlugin("gh")).toEqual({ url: "https://github.com/login/oauth" });
+		expect(await client.computer("ada")).toEqual({
+			userInControl: false,
+			handoffApprovalId: "ap9",
+			handoffReason: "2FA code",
+		});
+		await client.startCoding("ada", "fix it", "acme/site");
+		expect(calls.at(-1)).toMatchObject({
+			method: "POST",
+			url: "/v1/code",
+			body: { task: "fix it", repo: "acme/site" },
+		});
+		expect(readComputerState({ userInControl: true, pendingHandoff: "ap2" })).toEqual({
+			userInControl: true,
+			handoffApprovalId: "ap2",
+		});
+		expect(readComputerState(null)).toEqual({ userInControl: false });
 	});
 });

@@ -1,8 +1,21 @@
-import type { ActionKind, Look, Mood, Roster, RosterDot, RuleDecision, Skill, Trigger } from "./types.ts";
+import type {
+	ActionKind,
+	ApprovalRemember,
+	InboxItem,
+	InboxKind,
+	Look,
+	Mood,
+	Roster,
+	RosterDot,
+	Rule,
+	RuleDecision,
+	Skill,
+	Trigger,
+} from "./types.ts";
 
 /**
- * Pure helpers for showing Vos data, shared by the TUI and the desktop app.
- * No Node imports: the desktop renderer bundles this file.
+ * Pure helpers for showing Vos data, shared by the TUI commands and the view.
+ * No Node imports: the view bundle includes this file.
  */
 
 /** The phone app's named avatar colours, and a hex for each. */
@@ -62,6 +75,38 @@ export function sortRoster(dots: RosterDot[]): { shown: RosterDot[]; hidden: Ros
 	const rank = (d: RosterDot): number => (d.pinned ? 0 : d.id === "main" ? 1 : 2);
 	const sorted = [...dots].sort((a, b) => rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt));
 	return { shown: sorted.filter((d) => !d.hidden), hidden: sorted.filter((d) => d.hidden) };
+}
+
+/** The shown roster in sidebar order: pinned first, then each section (by name), then the rest. */
+export function rosterSections(dots: RosterDot[]): { name: string | null; dots: RosterDot[] }[] {
+	const { shown } = sortRoster(dots);
+	const pinned = shown.filter((d) => d.pinned);
+	const rest = shown.filter((d) => !d.pinned);
+	const named = new Map<string, RosterDot[]>();
+	const unfiled: RosterDot[] = [];
+	for (const d of rest) {
+		const section = d.section?.trim();
+		if (!section) {
+			unfiled.push(d);
+			continue;
+		}
+		const list = named.get(section) ?? [];
+		list.push(d);
+		named.set(section, list);
+	}
+	const out: { name: string | null; dots: RosterDot[] }[] = [];
+	if (pinned.length) out.push({ name: "Pinned", dots: pinned });
+	for (const name of [...named.keys()].sort((a, b) => a.localeCompare(b)))
+		out.push({ name, dots: named.get(name) ?? [] });
+	if (unfiled.length) out.push({ name: out.length ? "Other" : null, dots: unfiled });
+	return out;
+}
+
+/** Section names in use, for a "move to section" picker. */
+export function sectionNames(dots: RosterDot[]): string[] {
+	return [...new Set(dots.map((d) => d.section?.trim()).filter((s): s is string => !!s))].sort((a, b) =>
+		a.localeCompare(b),
+	);
 }
 
 export function unreadTotal(roster: Roster): number {
@@ -273,4 +318,73 @@ export function linkify(text: string): string {
 	return text.replace(/(^|\s)(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g, (_m, lead: string, url: string) => {
 		return `${lead}[${url}](${url})`;
 	});
+}
+
+// ---------------------------------------------------------------- inbox
+
+const INBOX_KINDS: Record<InboxKind, string> = {
+	approval: "Approval",
+	secret: "Secret",
+	safety: "Safety check",
+	handoff: "Take over",
+	question: "Question",
+	finding: "Finding",
+	failed: "Failed",
+	done: "Done",
+};
+export const inboxKindLabel = (kind: InboxKind): string => INBOX_KINDS[kind] ?? kind;
+
+const PRIORITY_RANK = { high: 0, normal: 1, low: 2 } as const;
+
+/** Open first, then high before normal before low, newest first within each. */
+export function sortInbox(items: InboxItem[]): InboxItem[] {
+	return [...items].sort(
+		(a, b) =>
+			Number(a.state !== "open") - Number(b.state !== "open") ||
+			(PRIORITY_RANK[a.priority] ?? 1) - (PRIORITY_RANK[b.priority] ?? 1) ||
+			b.date.localeCompare(a.date),
+	);
+}
+
+// ---------------------------------------------------------------- approvals in advance
+
+const REMEMBER: Record<ApprovalRemember, string> = {
+	once: "Once",
+	"1h": "For 1 hour",
+	today: "Today",
+	always: "Always",
+};
+export const rememberLabel = (remember: ApprovalRemember): string => REMEMBER[remember] ?? remember;
+
+/**
+ * When an approve-in-advance rule made now should lapse: an hour from now, the
+ * end of today (local time), or never (undefined) for "always" and "once".
+ */
+export function expiryFor(remember: ApprovalRemember, now: number = Date.now()): string | undefined {
+	if (remember === "1h") return new Date(now + 3_600_000).toISOString();
+	if (remember === "today") {
+		const end = new Date(now);
+		end.setHours(23, 59, 59, 999);
+		return end.toISOString();
+	}
+	return undefined;
+}
+
+/** A rule past its expiry; the server drops these, but a list fetched earlier can still hold one. */
+export function ruleExpired(rule: Pick<Rule, "expiresAt">, now: number = Date.now()): boolean {
+	const at = rule.expiresAt ? Date.parse(rule.expiresAt) : Number.NaN;
+	return Number.isFinite(at) && at <= now;
+}
+
+/** "until 14:30", "until tomorrow 09:00", "until 3 Oct": how long an expiring rule still holds. */
+export function untilLabel(iso: string | undefined, now: number = Date.now()): string {
+	const at = iso ? Date.parse(iso) : Number.NaN;
+	if (!Number.isFinite(at)) return "";
+	const when = new Date(at);
+	const today = new Date(now);
+	const time = `${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
+	if (when.toDateString() === today.toDateString()) return `until ${time}`;
+	const tomorrow = new Date(now + 86_400_000);
+	if (when.toDateString() === tomorrow.toDateString()) return `until tomorrow ${time}`;
+	return `until ${when.getDate()} ${when.toLocaleString("en", { month: "short" })}`;
 }
