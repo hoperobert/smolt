@@ -227,7 +227,11 @@ export function createVosExtension(options: VosExtensionOptions = {}) {
 		const vos = (): VosService => {
 			service ??= new VosService({
 				secrets: smolt.secrets,
-				post: (event, data) => smolt.postToView(VIEW_ID, event, data),
+				post: (event, data) => {
+					smolt.postToView(VIEW_ID, event, data);
+					// The settings row shows the connection too.
+					if (event === "connection") smolt.postToView(SETTINGS_VIEW_ID, event, data);
+				},
 				env,
 				fetch: options.fetch,
 				socket: options.socket,

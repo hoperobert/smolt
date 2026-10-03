@@ -23,7 +23,7 @@ document.addEventListener("click", (event) => {
 
 const settings = bridge.view.id.endsWith("-settings");
 document.documentElement.dataset.vosView = settings ? "settings" : "full";
-bootVos();
+bootVos({ connectionOnly: settings });
 
 const root = document.getElementById("root");
 if (root) {

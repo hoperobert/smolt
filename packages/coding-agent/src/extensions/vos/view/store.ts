@@ -295,6 +295,9 @@ const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
 
 // ---------------------------------------------------------------- connection
 
+/** The settings row only shows the connection: it loads nothing else and follows no thread. */
+let connectionOnly = false;
+
 export async function refreshConnection(): Promise<void> {
 	try {
 		vos.connection = (await bridge.request("status")) as VosConnection;
@@ -308,7 +311,7 @@ export async function refreshConnection(): Promise<void> {
 		};
 	}
 	bumpVos();
-	if (vos.connection?.connected) {
+	if (vos.connection?.connected && !connectionOnly) {
 		await refreshRoster();
 		void loadInbox();
 		if (!vos.selected) openVos();
@@ -624,10 +627,19 @@ export function applyEvent(incoming: Incoming): void {
 
 let wired = false;
 
-/** Hook the extension's events once, at boot. */
-export function bootVos(): void {
+/** Hook the extension's events once, at boot; `connectionOnly` for the settings row. */
+export function bootVos(options: { connectionOnly?: boolean } = {}): void {
 	if (wired) return;
 	wired = true;
+	connectionOnly = options.connectionOnly === true;
+	if (connectionOnly) {
+		bridge.on("connection", (raw) => {
+			vos.connection = raw as VosConnection;
+			bumpVos();
+		});
+		void refreshConnection();
+		return;
+	}
 	bridge.on("event", (event) => applyEvent(event as Incoming));
 	bridge.on("stream", (raw) => {
 		const { dot, state, error } = raw as { dot: string; state: ThreadState["stream"]; error?: string };
