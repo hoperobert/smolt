@@ -2,6 +2,8 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
+import { readFile } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
 import type { AgentMessage } from "@smolt/agent-core";
 import type { ImageContent, Model, Provider, ProviderHeaders } from "@smolt/ai";
 import type { KeyId } from "@smolt/tui";
@@ -12,6 +14,8 @@ import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
 import type { SessionManager } from "../session-manager.ts";
 import type { BuildSystemPromptOptions } from "../system-prompt.ts";
+import type { ExtensionHost } from "./host.ts";
+import { extensionId } from "./id.ts";
 import type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -35,6 +39,7 @@ import type {
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,
+	ExtensionViewInfo,
 	InputEvent,
 	InputEventResult,
 	InputSource,
@@ -49,6 +54,7 @@ import type {
 	ProviderConfig,
 	RegisteredCommand,
 	RegisteredTool,
+	RegisteredView,
 	ReplacedSessionContext,
 	ResolvedCommand,
 	ResourcesDiscoverEvent,
@@ -434,6 +440,77 @@ export class ExtensionRunner {
 		this.navigateTreeHandler = async () => ({ cancelled: false });
 		this.switchSessionHandler = async () => ({ cancelled: false });
 		this.reloadHandler = async () => {};
+	}
+
+	/**
+	 * Replace parts of the extension host (secrets, view delivery). Modes call
+	 * this through bindExtensions; omitted parts keep their terminal defaults.
+	 */
+	setHost(host: Partial<ExtensionHost> | undefined): void {
+		if (!host) return;
+		this.runtime.host = { ...this.runtime.host, ...host };
+	}
+
+	// =========================================================================
+	// Views
+	// =========================================================================
+
+	/** Every registered view, in the order front ends list them. First registration per id wins. */
+	getViews(): ExtensionViewInfo[] {
+		const seen = new Map<string, ExtensionViewInfo>();
+		for (const ext of this.extensions) {
+			for (const view of ext.views?.values() ?? []) {
+				const { definition } = view;
+				if (seen.has(definition.id)) continue;
+				seen.set(definition.id, {
+					id: definition.id,
+					extension: extensionId(ext.path),
+					title: definition.title,
+					...(definition.icon ? { icon: definition.icon } : {}),
+					location: definition.location ?? "sidebar",
+					order: definition.order ?? 0,
+					...(view.badge !== undefined ? { badge: view.badge } : {}),
+				});
+			}
+		}
+		return [...seen.values()].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+	}
+
+	private findView(viewId: string): { ext: Extension; view: RegisteredView } | undefined {
+		for (const ext of this.extensions) {
+			const view = ext.views?.get(viewId);
+			if (view) return { ext, view };
+		}
+		return undefined;
+	}
+
+	/** The view's HTML document, as its extension provides it. */
+	async getViewHtml(viewId: string): Promise<string> {
+		const found = this.findView(viewId);
+		if (!found) throw new Error(`No view "${viewId}"`);
+		const { definition } = found.view;
+		if (typeof definition.html === "string") return definition.html;
+		if (typeof definition.html === "function") return await definition.html();
+		if (definition.path) {
+			const base = found.ext.path.startsWith("<") ? process.cwd() : dirname(found.ext.resolvedPath);
+			const file = isAbsolute(definition.path) ? definition.path : resolve(base, definition.path);
+			return await readFile(file, "utf-8");
+		}
+		throw new Error(`View "${viewId}" has no page`);
+	}
+
+	/** Route one `window.smolt.request` from a view to its extension's handler. */
+	async handleViewRequest(viewId: string, method: string, params: unknown): Promise<unknown> {
+		const found = this.findView(viewId);
+		if (!found) throw new Error(`No view "${viewId}"`);
+		const handler = found.ext.viewRequestHandlers?.get(viewId);
+		if (!handler) throw new Error(`View "${viewId}" takes no requests`);
+		return await handler(method, params, this.createContext());
+	}
+
+	/** A front end that shows views attached to this process. */
+	async emitViewsAttached(): Promise<void> {
+		await this.emit({ type: "views_attached" });
 	}
 
 	setUIContext(uiContext?: ExtensionUIContext, mode: ExtensionMode = "print"): void {

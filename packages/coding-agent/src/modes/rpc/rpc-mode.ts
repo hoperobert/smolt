@@ -14,9 +14,12 @@
 import * as crypto from "node:crypto";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
+	ExtensionHost,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	SecretBackend,
+	SecretStore,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { extensionId } from "../../core/extensions/loader.ts";
@@ -49,6 +52,8 @@ import type {
 	RpcExtensionInfo,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
+	RpcHostRequest,
+	RpcHostResponse,
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
@@ -201,7 +206,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
 			),
 
-		notify(message: string, type?: "info" | "warning" | "error"): void {
+		notify(message, type, options): void {
 			// Fire and forget - no response needed
 			output({
 				type: "extension_ui_request",
@@ -209,6 +214,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				method: "notify",
 				message,
 				notifyType: type,
+				...(options?.native ? { native: true } : {}),
+				...(options?.title ? { title: options.title } : {}),
+				...(options?.openView ? { openView: options.openView } : {}),
 			} as RpcExtensionUIRequest);
 		},
 
@@ -355,6 +363,69 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		},
 	});
 
+	// ---------------------------------------------------------------------
+	// Extension host: views and secrets
+	// ---------------------------------------------------------------------
+
+	/** Set by attach_views: this client draws extension views, so their events go out. */
+	let viewsAttached = false;
+
+	const pendingHostRequests = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+	const HOST_REQUEST_TIMEOUT_MS = 30_000;
+
+	/** Ask the client for a host service and wait for its answer. */
+	const hostRequest = (request: Omit<RpcHostRequest, "type" | "id">): Promise<unknown> => {
+		const id = crypto.randomUUID();
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				pendingHostRequests.delete(id);
+				reject(new Error(`The client did not answer ${request.method}`));
+			}, HOST_REQUEST_TIMEOUT_MS);
+			timer.unref?.();
+			pendingHostRequests.set(id, {
+				resolve: (value) => {
+					clearTimeout(timer);
+					resolve(value);
+				},
+				reject: (err) => {
+					clearTimeout(timer);
+					reject(err);
+				},
+			});
+			output({ type: "host_request", id, ...request } satisfies RpcHostRequest);
+		});
+	};
+
+	/** Secrets kept by the client (the desktop's OS keystore), when it said it keeps them. */
+	const clientSecrets: SecretStore = {
+		get: async (scope, key) => {
+			const value = await hostRequest({ method: "secrets_get", scope, key });
+			return typeof value === "string" ? value : undefined;
+		},
+		set: async (scope, key, value) => {
+			await hostRequest({ method: "secrets_set", scope, key, value });
+		},
+		delete: async (scope, key) => {
+			await hostRequest({ method: "secrets_delete", scope, key });
+		},
+		backend: async () => {
+			const value = await hostRequest({ method: "secrets_backend" });
+			return value === "keychain" || value === "memory" || value === "file" ? (value as SecretBackend) : "memory";
+		},
+	};
+
+	const extensionHost: Partial<ExtensionHost> = {
+		postToView: (viewId, event, data) => {
+			if (!viewsAttached) return;
+			output({ type: "view_event", viewId, event, data });
+		},
+		viewsChanged: () => {
+			if (!viewsAttached) return;
+			output({ type: "views_changed", views: session.extensionRunner.getViews() });
+		},
+		...(process.env.SMOLT_RPC_HOST_SECRETS === "1" ? { secrets: clientSecrets } : {}),
+	};
+
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
 		// The active session was replaced from inside the agent (an extension's
@@ -394,10 +465,18 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			shutdownHandler: () => {
 				shutdownRequested = true;
 			},
+			host: extensionHost,
 			onError: (err) => {
 				output({ type: "extension_error", extensionPath: err.extensionPath, event: err.event, error: err.error });
 			},
 		});
+
+		// A replaced session brings fresh extension instances: they need telling
+		// that views are shown, and the client a fresh list.
+		if (viewsAttached) {
+			void session.extensionRunner.emitViewsAttached();
+			output({ type: "views_changed", views: session.extensionRunner.getViews() });
+		}
 
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
@@ -1069,6 +1148,35 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				return success(id, "get_commands", { commands });
 			}
 
+			// =================================================================
+			// Extension views
+			// =================================================================
+
+			case "list_views": {
+				return success(id, "list_views", { views: session.extensionRunner.getViews() });
+			}
+
+			case "get_view": {
+				const html = await session.extensionRunner.getViewHtml(command.viewId);
+				return success(id, "get_view", { html });
+			}
+
+			case "view_request": {
+				const value = await session.extensionRunner.handleViewRequest(
+					command.viewId,
+					command.method,
+					command.params,
+				);
+				return success(id, "view_request", { value: value === undefined ? null : value });
+			}
+
+			case "attach_views": {
+				const first = !viewsAttached;
+				viewsAttached = true;
+				if (first) void session.extensionRunner.emitViewsAttached();
+				return success(id, "attach_views");
+			}
+
 			default: {
 				const unknownCommand = command as { type: string };
 				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
@@ -1120,6 +1228,18 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				),
 			);
 			await waitForRawStdoutBackpressure();
+			return;
+		}
+
+		// Answers to the agent's own host requests (secrets kept by the client)
+		if (typeof parsed === "object" && parsed !== null && "type" in parsed && parsed.type === "host_response") {
+			const response = parsed as RpcHostResponse;
+			const pending = pendingHostRequests.get(response.id);
+			if (pending) {
+				pendingHostRequests.delete(response.id);
+				if (response.error) pending.reject(new Error(response.error));
+				else pending.resolve(response.value);
+			}
 			return;
 		}
 

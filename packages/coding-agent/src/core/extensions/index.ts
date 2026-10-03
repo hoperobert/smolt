@@ -5,6 +5,13 @@
 export type { SlashCommandInfo, SlashCommandSource } from "../slash-commands.ts";
 export type { SourceInfo } from "../source-info.ts";
 export {
+	createDefaultExtensionHost,
+	defaultSecretsPath,
+	FileSecretStore,
+	type SecretBackend,
+	type SecretStore,
+} from "./host.ts";
+export {
 	createExtensionRuntime,
 	discoverAndLoadExtensions,
 	loadExtensionFromFactory,
@@ -75,12 +82,19 @@ export type {
 	ExtensionFactory,
 	ExtensionFlag,
 	ExtensionHandler,
+	ExtensionHost,
 	ExtensionMode,
+	ExtensionNotifyOptions,
 	// Runtime
 	ExtensionRuntime,
+	ExtensionSecrets,
 	ExtensionShortcut,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionViewDefinition,
+	ExtensionViewInfo,
+	ExtensionViewLocation,
+	ExtensionViewRequestHandler,
 	ExtensionWidgetOptions,
 	FindToolCallEvent,
 	FindToolResultEvent,
@@ -176,6 +190,7 @@ export type {
 	// Events - User Bash
 	UserBashEvent,
 	UserBashEventResult,
+	ViewsAttachedEvent,
 	WidgetPlacement,
 	WorkingIndicatorOptions,
 	WriteToolCallEvent,

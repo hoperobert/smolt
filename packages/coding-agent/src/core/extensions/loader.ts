@@ -32,12 +32,17 @@ import { execCommand } from "../exec.ts";
 import { readSmoltManifest } from "../smolt-manifest.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
 import { time } from "../timings.ts";
+import { createDefaultExtensionHost } from "./host.ts";
+import { extensionId } from "./id.ts";
 import type {
 	EntryRenderer,
 	Extension,
 	ExtensionAPI,
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionRuntime,
+	ExtensionViewDefinition,
+	ExtensionViewRequestHandler,
 	LoadExtensionsResult,
 	MarkdownTransformer,
 	MessageRenderer,
@@ -46,6 +51,8 @@ import type {
 	ThinkingLevelSelectorEntry,
 	ToolDefinition,
 } from "./types.ts";
+
+export { extensionId };
 
 /** Modules available to extensions via virtualModules (for compiled binaries) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
@@ -155,19 +162,6 @@ interface ExtensionCacheToken {
 	generation: number;
 }
 
-/**
- * Stable identity for switching an extension on and off in settings.
- * Built-ins arrive as `<inline:learning>`; a file extension is identified by
- * its own file name (or its directory, for an `index` entry) so the id keeps
- * working when the absolute path differs from one machine to the next.
- */
-export function extensionId(extensionPath: string): string {
-	const inline = /^<inline:(.+)>$/.exec(extensionPath);
-	if (inline) return inline[1] as string;
-	const base = path.basename(extensionPath).replace(/\.(?:[cm]?[jt]s)$/i, "");
-	return base === "index" ? path.basename(path.dirname(extensionPath)) : base;
-}
-
 export function clearExtensionCache(): void {
 	extensionCache.clear();
 	extensionCacheCwd = undefined;
@@ -217,6 +211,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		getThinkingLevel: notInitialized,
 		setThinkingLevel: notInitialized,
 		flagValues: new Map(),
+		host: createDefaultExtensionHost(),
 		pendingProviderRegistrations: [],
 		pendingNativeProviderRegistrations: [],
 		assertActive,
@@ -270,6 +265,8 @@ function createExtensionAPI(
 	eventBus: EventBus,
 ): { api: ExtensionAPI; commit: () => void; discard: () => void } {
 	const pendingFlagValues = new Map<string, boolean | string>();
+	/** Secrets are kept per extension, by the same id settings switch it with. */
+	const scope = extensionId(extension.path);
 	const pendingRuntimeChanges: Array<() => void> = [];
 	const loadingUnsubscribers: Array<() => void> = [];
 	let state: "loading" | "active" | "failed" = "loading";
@@ -320,7 +317,7 @@ function createExtensionAPI(
 			shortcut: KeyId,
 			options: {
 				description?: string;
-				handler: (ctx: import("./types.ts").ExtensionContext) => Promise<void> | void;
+				handler: (ctx: ExtensionContext) => Promise<void> | void;
 			},
 		): void {
 			assertActive();
@@ -467,6 +464,58 @@ function createExtensionAPI(
 		unregisterProvider(name: string) {
 			assertActive();
 			applyRuntimeChange(() => runtime.unregisterProvider(name, extension.path));
+		},
+
+		registerView(view: ExtensionViewDefinition): void {
+			assertActive();
+			if (!view || typeof view.id !== "string" || view.id.trim() === "") {
+				throw new Error("registerView: a view needs an id");
+			}
+			if (view.html === undefined && view.path === undefined) {
+				throw new Error(`registerView: view "${view.id}" needs html or a path`);
+			}
+			extension.views ??= new Map();
+			const existing = extension.views.get(view.id);
+			extension.views.set(view.id, { definition: view, extensionPath: extension.path, badge: existing?.badge });
+			if (state !== "loading") runtime.host.viewsChanged();
+		},
+
+		onViewRequest(viewId: string, handler: ExtensionViewRequestHandler): void {
+			assertActive();
+			extension.viewRequestHandlers ??= new Map();
+			extension.viewRequestHandlers.set(viewId, handler);
+		},
+
+		postToView(viewId: string, event: string, data?: unknown): void {
+			assertActive();
+			if (!extension.views?.has(viewId)) return;
+			runtime.host.postToView(viewId, event, data ?? null);
+		},
+
+		setViewBadge(viewId: string, badge: number | string | undefined): void {
+			assertActive();
+			const view = extension.views?.get(viewId);
+			if (!view) return;
+			const next = badge === 0 || badge === "" ? undefined : badge;
+			if (view.badge === next) return;
+			view.badge = next;
+			runtime.host.viewsChanged();
+		},
+
+		secrets: {
+			get: (key: string) => {
+				assertActive();
+				return runtime.host.secrets.get(scope, key);
+			},
+			set: (key: string, value: string) => {
+				assertActive();
+				return runtime.host.secrets.set(scope, key, value);
+			},
+			delete: (key: string) => {
+				assertActive();
+				return runtime.host.secrets.delete(scope, key);
+			},
+			backend: () => runtime.host.secrets.backend(),
 		},
 
 		events: {

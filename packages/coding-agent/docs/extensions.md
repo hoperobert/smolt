@@ -49,6 +49,8 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 - [Custom Tools](#custom-tools)
   - [Dynamic Tool Loading](#dynamic-tool-loading)
 - [Custom UI](#custom-ui)
+- [Views](#views)
+- [Secrets](#secrets)
 - [Error Handling](#error-handling)
 - [Mode Behavior](#mode-behavior)
 - [Examples Reference](#examples-reference)
@@ -2942,6 +2944,68 @@ const highlighted = highlightCode("const x = 1;", "typescript", theme);
 const lang = getLanguageFromPath("/path/to/file.rs");  // "rust"
 const highlighted = highlightCode(code, lang, theme);
 ```
+
+## Views
+
+A view is a page an extension contributes to a graphical front end: the desktop app lists `sidebar` views above the chats and opens them in the main pane, and shows `settings` views as sections in Settings, in the window and in its browser build alike. The terminal shows no views; give terminal users `ctx.ui.custom` (see [Custom Components](#custom-components)). The built-in Vos extension (`src/extensions/vos/`) is a complete example: React components built into one HTML file, every request answered on its Node side.
+
+```typescript
+export default function (smolt: ExtensionAPI) {
+  smolt.registerView({
+    id: "notes",                  // unique across extensions
+    title: "Notes",
+    icon: "✎",                    // one or two characters
+    location: "sidebar",          // or "settings"
+    html: () => readFileSync(new URL("./notes.html", import.meta.url), "utf-8"),
+    // or: path: "./notes.html"  (relative to the extension file)
+  });
+
+  // Answers window.smolt.request(method, params) from the page.
+  smolt.onViewRequest("notes", async (method, params, ctx) => {
+    if (method === "list") return loadNotes();
+    if (method === "add") return addNote((params as { text: string }).text);
+    throw new Error(`Unknown request: ${method}`);   // rejects the page's promise
+  });
+
+  // Push events to the page; dropped when no front end shows views.
+  smolt.postToView("notes", "changed", { count: 3 });
+  smolt.setViewBadge("notes", 3);                   // the sidebar entry's badge; undefined clears it
+
+  // Work that only matters while a front end shows views (badges, watchers).
+  smolt.on("views_attached", (_event, ctx) => { /* start polling */ });
+}
+```
+
+The page is a whole HTML document. It runs in a sandboxed frame (`sandbox="allow-scripts"`: an opaque origin, no popups, no forms, no access to the app) with a CSP that allows inline script and style, `data:`/`blob:` images and fonts, and **no network**: everything goes through the `window.smolt` the host injects, to the extension's Node side, which can hold keys and talk to servers. Inline your scripts and styles (a bundler's single-file output works).
+
+```js
+const notes = await window.smolt.request("list");     // onViewRequest's return value, JSON
+const off = window.smolt.on("changed", (data) => {});  // postToView; returns an unsubscribe
+window.smolt.view;                                     // { id, theme: "dark" | "light" }
+window.smolt.openUrl("https://example.com");           // opens in the user's browser
+await window.smolt.copy("text");                       // to the clipboard
+```
+
+The app's theme arrives as CSS custom properties on `:root`, and follows the user's theme switch live (`data-theme` on `<html>` is `light` or `dark`): `--background`, `--background-deep`, `--foreground`, `--card`, `--card-foreground`, `--popover`, `--popover-foreground`, `--primary`, `--primary-foreground`, `--secondary`, `--secondary-foreground`, `--muted`, `--muted-foreground`, `--accent`, `--accent-foreground`, `--destructive`, `--destructive-foreground`, `--border`, `--border-strong`, `--input`, `--ring`, `--ok`, `--warn`, `--tint`, `--tint-text`, `--salmon`, `--faint`, `--radius`, `--shadow-rgb`. A `settings` view is sized to its content, so keep it short and give its `html`/`body` an automatic height.
+
+In the desktop app all views live in one agent process of their own, apart from the chats, so a view's connections and timers survive chat switches; switching an extension off in Settings restarts that process and its views leave the app at once. Over RPC (`--mode rpc`), a client draws views with `list_views`, `get_view`, `view_request` and `attach_views`, and receives `view_event` and `views_changed`; see [rpc.md](rpc.md).
+
+### Native notifications
+
+`ctx.ui.notify(message, type, { native: true, title, openView })` also asks a front end that can for an operating-system notification, seen while the window is in the background; clicking it opens `openView`. The terminal shows the message as usual.
+
+## Secrets
+
+`smolt.secrets` keeps an extension's own secrets (API keys, device tokens), scoped to the extension so one cannot read another's:
+
+```typescript
+await smolt.secrets.set("apiKey", key);
+const key = await smolt.secrets.get("apiKey");   // undefined when unset
+await smolt.secrets.delete("apiKey");
+await smolt.secrets.backend();                   // "keychain" | "file" | "memory"
+```
+
+In the terminal they go to `~/.smolt/agent/extension-secrets.json`, mode 0600. Under the desktop app the agent asks the app (an RPC `host_request`, enabled by `SMOLT_RPC_HOST_SECRETS=1`), which seals them with the operating system's keystore through Electron safeStorage; where there is no real keystore the backend is `memory` and values last for that run only.
 
 ## Error Handling
 

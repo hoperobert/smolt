@@ -10,6 +10,7 @@ import type { ImageContent } from "@smolt/ai";
 import type { ProviderUsageSnapshot, SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { ExtensionViewInfo } from "../../core/extensions/types.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { JsonAgentSessionEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -18,6 +19,7 @@ import type {
 	RpcAdvisorSettingsUpdate,
 	RpcCommand,
 	RpcExtensionInfo,
+	RpcHostRequest,
 	RpcResponse,
 	RpcReviewSettings,
 	RpcReviewSettingsUpdate,
@@ -64,6 +66,12 @@ export interface RpcClientOptions {
 	 * (the desktop's crash log) hooks it here so the evidence survives.
 	 */
 	onDiagnostic?: (line: string) => void;
+	/**
+	 * Answer the agent's host requests (secrets it asks this client to keep).
+	 * Only asked for when the agent runs with SMOLT_RPC_HOST_SECRETS=1; a
+	 * client without a handler answers with an error.
+	 */
+	onHostRequest?: (request: RpcHostRequest) => unknown | Promise<unknown>;
 }
 
 /**
@@ -81,6 +89,8 @@ const RPC_TIMEOUT_MS: Partial<Record<RpcCommand["type"], number>> = {
 	prompt: 10 * 60 * 1000,
 	// A browser sign-in waits on a person.
 	login: 15 * 60 * 1000,
+	// A view's request can wait on a slow server behind the extension.
+	view_request: 2 * 60 * 1000,
 	// Summarising a full 131k window on a local model is a quarter of an hour
 	// of prompt processing alone; giving up before it answered made /compact
 	// look like it did nothing.
@@ -708,8 +718,54 @@ export class RpcClient {
 	}
 
 	// =========================================================================
+	// Extension views
+	// =========================================================================
+
+	/** The views extensions registered, for a front end to list. */
+	async listViews(): Promise<{ views: ExtensionViewInfo[] }> {
+		const response = await this.send({ type: "list_views" });
+		return this.getData(response);
+	}
+
+	/** A view's HTML document. */
+	async getView(viewId: string): Promise<{ html: string }> {
+		const response = await this.send({ type: "get_view", viewId });
+		return this.getData(response);
+	}
+
+	/** One `window.smolt.request` from a view, answered by its extension. */
+	async viewRequest(viewId: string, method: string, params?: unknown): Promise<unknown> {
+		const response = await this.send({ type: "view_request", viewId, method, params });
+		return this.getData<{ value: unknown }>(response).value;
+	}
+
+	/** Say this client shows views: view_event and views_changed start arriving. */
+	async attachViews(): Promise<void> {
+		await this.send({ type: "attach_views" });
+	}
+
+	// =========================================================================
 	// Internal
 	// =========================================================================
+
+	private answerHostRequest(request: RpcHostRequest): void {
+		const reply = (body: { value?: unknown; error?: string }): void => {
+			const stdin = this.process?.stdin;
+			if (!stdin || stdin.destroyed || !stdin.writable) return;
+			stdin.write(serializeJsonLine({ type: "host_response", id: request.id, ...body }));
+		};
+		const handler = this.options.onHostRequest;
+		if (!handler) {
+			reply({ error: "This client keeps no secrets" });
+			return;
+		}
+		Promise.resolve()
+			.then(() => handler(request))
+			.then(
+				(value) => reply({ value: value === undefined ? null : value }),
+				(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
+			);
+	}
 
 	private handleLine(line: string): void {
 		try {
@@ -720,6 +776,12 @@ export class RpcClient {
 				const pending = this.pendingRequests.get(data.id)!;
 				this.pendingRequests.delete(data.id);
 				pending.resolve(data as RpcResponse);
+				return;
+			}
+
+			// The agent asking this client for a host service; never an event.
+			if (data.type === "host_request" && typeof data.id === "string") {
+				this.answerHostRequest(data as RpcHostRequest);
 				return;
 			}
 

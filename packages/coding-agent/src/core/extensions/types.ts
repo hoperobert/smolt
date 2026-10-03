@@ -84,9 +84,11 @@ import type {
 	ReadToolInput,
 	WriteToolInput,
 } from "../tools/index.ts";
+import type { ExtensionHost, SecretBackend } from "./host.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions } from "../system-prompt.ts";
+export type { ExtensionHost, SecretBackend, SecretStore } from "./host.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
 
@@ -115,6 +117,22 @@ export interface ExtensionWidgetOptions {
 	 * tickets and actions it counts. JSON-serializable; ignored by the TUI.
 	 */
 	details?: unknown;
+}
+
+/**
+ * Options for `ctx.ui.notify`.
+ *
+ * `native` asks a front end that can (the desktop app) for an operating-system
+ * notification as well, one that is seen while the window is in the
+ * background. The terminal shows the message as usual and ignores the rest.
+ */
+export interface ExtensionNotifyOptions {
+	/** Also show an operating-system notification where the front end supports it. */
+	native?: boolean;
+	/** The native notification's title; the message becomes its body. */
+	title?: string;
+	/** A view of this extension's to open when the notification is clicked. */
+	openView?: string;
 }
 
 /** Raw terminal input listener for extensions. */
@@ -160,8 +178,8 @@ export interface ExtensionUIContext {
 	/** Show a text input dialog. */
 	input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
-	/** Show a notification to the user. */
-	notify(message: string, type?: "info" | "warning" | "error"): void;
+	/** Show a notification to the user; `options.native` also asks for an OS notification. */
+	notify(message: string, type?: "info" | "warning" | "error", options?: ExtensionNotifyOptions): void;
 
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;
@@ -1181,6 +1199,7 @@ export type ExtensionEvent =
 	| ThinkingLevelSelectEvent
 	| UserBashEvent
 	| InputEvent
+	| ViewsAttachedEvent
 	| ToolCallEvent
 	| ToolResultEvent;
 
@@ -1334,6 +1353,110 @@ export interface ResolvedCommand extends RegisteredCommand {
 }
 
 // ============================================================================
+// Views
+// ============================================================================
+
+/** Where a front end lists a view: the sidebar (opens in the main pane) or settings (inline). */
+export type ExtensionViewLocation = "sidebar" | "settings";
+
+/**
+ * A page an extension contributes to a graphical front end (the desktop app,
+ * in the window and in its browser build). The terminal does not show views;
+ * an extension that wants a terminal UI too uses `ctx.ui.custom`.
+ *
+ * The page is an HTML document, drawn in a sandboxed frame: scripts run, but
+ * it has no Node, no network (its CSP allows no connections), no cookies and
+ * no access to the app. It talks to the extension's own Node side only
+ * through `window.smolt`, which the host injects:
+ *
+ * ```js
+ * const roster = await window.smolt.request("roster", { all: true }); // onViewRequest handler
+ * window.smolt.on("roster", (data) => render(data));                   // postToView
+ * window.smolt.view;              // { id, theme: "dark" | "light" }
+ * window.smolt.openUrl(url);      // open an http(s) link in the browser
+ * window.smolt.copy(text);        // to the clipboard
+ * ```
+ *
+ * The app's theme arrives as CSS custom properties on `:root` (`--background`,
+ * `--foreground`, `--card`, `--primary`, `--border`, ... the names in the
+ * extension docs), with `data-theme` set to `light` or `dark`, and is updated
+ * live when the user switches theme.
+ */
+export interface ExtensionViewDefinition {
+	/** Stable id, unique across extensions, e.g. "vos". */
+	id: string;
+	/** Shown in the sidebar or as the settings section's heading. */
+	title: string;
+	/** A short glyph (one or two characters) shown beside the title. */
+	icon?: string;
+	/** Defaults to "sidebar". */
+	location?: ExtensionViewLocation;
+	/**
+	 * The page: a complete HTML document, or a function that produces one when
+	 * a front end first opens the view (so a large bundle is read lazily).
+	 */
+	html?: string | (() => string | Promise<string>);
+	/** Or a path to an HTML file, absolute or relative to the extension's file. */
+	path?: string;
+	/** Sort order among views in the same location; lower first. */
+	order?: number;
+}
+
+/**
+ * Answers `window.smolt.request(method, params)` from the view. The return
+ * value (JSON-serialisable) resolves the view's promise; a throw rejects it
+ * with the error's message.
+ */
+export type ExtensionViewRequestHandler = (
+	method: string,
+	params: unknown,
+	ctx: ExtensionContext,
+) => unknown | Promise<unknown>;
+
+/** A registered view as front ends list it. */
+export interface ExtensionViewInfo {
+	id: string;
+	/** The extension's id, as settings switch it on and off. */
+	extension: string;
+	title: string;
+	icon?: string;
+	location: ExtensionViewLocation;
+	order: number;
+	/** A count or short text shown on the view's sidebar entry. */
+	badge?: number | string;
+}
+
+export interface RegisteredView {
+	definition: ExtensionViewDefinition;
+	extensionPath: string;
+	badge?: number | string;
+}
+
+/**
+ * Fired when a front end that shows views attaches to this agent process
+ * (the desktop app runs one such process for all extension views). Work that
+ * only makes sense while a view can be shown (watching for notifications,
+ * keeping a badge current) starts here.
+ */
+export interface ViewsAttachedEvent {
+	type: "views_attached";
+}
+
+/**
+ * An extension's own secrets: API keys, device tokens. Kept by the host, not
+ * the extension: the OS keystore in the desktop app, a 0600 file
+ * (~/.smolt/agent/extension-secrets.json) in the terminal. Scoped to the
+ * extension, so one extension cannot read another's.
+ */
+export interface ExtensionSecrets {
+	get(key: string): Promise<string | undefined>;
+	set(key: string, value: string): Promise<void>;
+	delete(key: string): Promise<void>;
+	/** Where `set` puts a value: "keychain", "file", or "memory" (this process only). */
+	backend(): Promise<SecretBackend>;
+}
+
+// ============================================================================
 // Extension API
 // ============================================================================
 
@@ -1395,6 +1518,7 @@ export interface ExtensionAPI {
 	on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
 	on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
 	on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): void;
+	on(event: "views_attached", handler: ExtensionHandler<ViewsAttachedEvent>): void;
 
 	// =========================================================================
 	// Tool Registration
@@ -1611,6 +1735,25 @@ export interface ExtensionAPI {
 
 	/** Shared event bus for extension communication. */
 	events: EventBus;
+
+	// =========================================================================
+	// Views and secrets
+	// =========================================================================
+
+	/** Contribute a page to graphical front ends. See ExtensionViewDefinition. */
+	registerView(view: ExtensionViewDefinition): void;
+
+	/** Answer requests from a view this extension registered. One handler per view; the last one wins. */
+	onViewRequest(viewId: string, handler: ExtensionViewRequestHandler): void;
+
+	/** Push an event to a view (`window.smolt.on(event, cb)`). Dropped when no front end shows views. */
+	postToView(viewId: string, event: string, data?: unknown): void;
+
+	/** Set or clear the badge on a view's sidebar entry (e.g. an unread count). */
+	setViewBadge(viewId: string, badge: number | string | undefined): void;
+
+	/** This extension's secret store. */
+	secrets: ExtensionSecrets;
 }
 
 // ============================================================================
@@ -1809,6 +1952,8 @@ export interface ExtensionRuntimeState {
 	registerProvider: (name: string, config: ProviderConfig, extensionPath?: string) => void;
 	registerNativeProvider: (provider: Provider, extensionPath?: string) => void;
 	unregisterProvider: (name: string, extensionPath?: string) => void;
+	/** Secrets and views, as the mode running the extensions provides them. */
+	host: ExtensionHost;
 }
 
 /**
@@ -1899,6 +2044,8 @@ export interface Extension {
 	flags: Map<string, ExtensionFlag>;
 	shortcuts: Map<KeyId, ExtensionShortcut>;
 	thinkingLevelEntries: Map<string, ThinkingLevelSelectorEntry>;
+	views?: Map<string, RegisteredView>;
+	viewRequestHandlers?: Map<string, ExtensionViewRequestHandler>;
 }
 
 /** Result of loading extensions. */

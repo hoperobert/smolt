@@ -10,6 +10,7 @@ import type { ImageContent, Model } from "@smolt/ai";
 import type { ProviderUsageSnapshot, SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { ExtensionViewInfo } from "../../core/extensions/types.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 
@@ -91,7 +92,14 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// Extension views: pages extensions contribute to a graphical front end
+	| { id?: string; type: "list_views" }
+	| { id?: string; type: "get_view"; viewId: string }
+	| { id?: string; type: "view_request"; viewId: string; method: string; params?: unknown }
+	/** This client shows views: extensions hear views_attached, and view events start flowing. */
+	| { id?: string; type: "attach_views" };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -372,6 +380,12 @@ export type RpcResponse =
 			data: { commands: RpcSlashCommand[] };
 	  }
 
+	// Extension views
+	| { id?: string; type: "response"; command: "list_views"; success: true; data: { views: ExtensionViewInfo[] } }
+	| { id?: string; type: "response"; command: "get_view"; success: true; data: { html: string } }
+	| { id?: string; type: "response"; command: "view_request"; success: true; data: { value: unknown } }
+	| { id?: string; type: "response"; command: "attach_views"; success: true }
+
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
 
@@ -408,6 +422,11 @@ export type RpcExtensionUIRequest =
 			method: "notify";
 			message: string;
 			notifyType?: "info" | "warning" | "error";
+			/** Also an operating-system notification (ExtensionNotifyOptions). */
+			native?: boolean;
+			title?: string;
+			/** A view to open when the notification is clicked. */
+			openView?: string;
 	  }
 	| {
 			type: "extension_ui_request";
@@ -441,6 +460,46 @@ export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; values: string[] }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
+
+// ============================================================================
+// Extension views and host services (stdout / stdin)
+// ============================================================================
+
+/** An extension pushed an event to one of its views (postToView). Only sent after attach_views. */
+export interface RpcViewEvent {
+	type: "view_event";
+	viewId: string;
+	event: string;
+	data: unknown;
+}
+
+/** The registered views, or a badge on one, changed. Only sent after attach_views. */
+export interface RpcViewsChanged {
+	type: "views_changed";
+	views: ExtensionViewInfo[];
+}
+
+/**
+ * The agent asks its client for a host service. Sent only when the client
+ * said it provides them (SMOLT_RPC_HOST_SECRETS=1 in the agent's environment):
+ * the desktop keeps extension secrets with the OS keystore in its own process.
+ */
+export interface RpcHostRequest {
+	type: "host_request";
+	id: string;
+	method: "secrets_get" | "secrets_set" | "secrets_delete" | "secrets_backend";
+	scope?: string;
+	key?: string;
+	value?: string;
+}
+
+/** The client's answer to a host_request. */
+export interface RpcHostResponse {
+	type: "host_response";
+	id: string;
+	value?: unknown;
+	error?: string;
+}
 
 // ============================================================================
 // Helper type for extracting command types

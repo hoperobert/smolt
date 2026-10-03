@@ -83,6 +83,7 @@ import {
 	type ExtensionCommandContext,
 	type ExtensionCommandContextActions,
 	type ExtensionErrorListener,
+	type ExtensionHost,
 	type ExtensionMode,
 	ExtensionRunner,
 	type ExtensionUIContext,
@@ -257,6 +258,8 @@ export interface ExtensionBindings {
 	abortHandler?: () => void;
 	shutdownHandler?: ShutdownHandler;
 	onError?: ExtensionErrorListener;
+	/** Secrets and view delivery, where the mode replaces the terminal's defaults. */
+	host?: Partial<ExtensionHost>;
 }
 
 /**
@@ -601,6 +604,7 @@ export class AgentSession {
 	private _extensionAbortHandler?: () => void;
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
+	private _extensionHost?: Partial<ExtensionHost>;
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
@@ -3014,6 +3018,9 @@ export class AgentSession {
 		if (bindings.onError !== undefined) {
 			this._extensionErrorListener = bindings.onError;
 		}
+		if (bindings.host !== undefined) {
+			this._extensionHost = bindings.host;
+		}
 
 		this._applyExtensionBindings(this._extensionRunner);
 		await this._extensionRunner.emit(this._sessionStartEvent);
@@ -3076,6 +3083,7 @@ export class AgentSession {
 	private _applyExtensionBindings(runner: ExtensionRunner): void {
 		runner.setUIContext(this._extensionUIContext, this._extensionMode);
 		runner.bindCommandContext(this._extensionCommandContextActions);
+		runner.setHost(this._extensionHost);
 
 		this._extensionErrorUnsubscriber?.();
 		this._extensionErrorUnsubscriber = this._extensionErrorListener

@@ -1373,6 +1373,23 @@ Dismiss any dialog method. The extension receives `undefined` (for select/input/
 {"type": "extension_ui_response", "id": "uuid-3", "cancelled": true}
 ```
 
+## Extension Views and Host Services
+
+Clients that can draw extension views (see [extensions.md](extensions.md#views)) use these commands:
+
+| Command | Response `data` |
+| --- | --- |
+| `{"type": "list_views"}` | `{"views": [{"id", "extension", "title", "icon"?, "location": "sidebar"\|"settings", "order", "badge"?}]}` |
+| `{"type": "get_view", "viewId": "vos"}` | `{"html": "<!doctype html>…"}` |
+| `{"type": "view_request", "viewId": "vos", "method": "status", "params": {}}` | `{"value": …}` (the extension's `onViewRequest` result; an error response when it throws) |
+| `{"type": "attach_views"}` | none. Extensions hear `views_attached`, and the two events below start flowing |
+
+After `attach_views`, the agent emits `{"type": "view_event", "viewId", "event", "data"}` for each `postToView`, and `{"type": "views_changed", "views": [...]}` when views or badges change.
+
+When the agent runs with `SMOLT_RPC_HOST_SECRETS=1`, extension secrets are kept by the client: the agent emits `{"type": "host_request", "id", "method": "secrets_get" | "secrets_set" | "secrets_delete" | "secrets_backend", "scope", "key", "value"?}` and waits up to 30 seconds for `{"type": "host_response", "id", "value"?}` or `{"type": "host_response", "id", "error": "…"}` on stdin. `secrets_get` answers the value or `null`; `secrets_backend` answers `"keychain"`, `"file"` or `"memory"`. `RpcClient` answers through its `onHostRequest` option.
+
+A `notify` extension UI request may carry `native: true`, `title` and `openView`: the extension asks for an operating-system notification, and for that view to open when it is clicked.
+
 ## Error Handling
 
 Failed commands return a response with `success: false`:
