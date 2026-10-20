@@ -146,5 +146,12 @@ contextBridge.exposeInMainWorld("smolt", {
 	},
 	webServer: (): Promise<unknown> => ipcRenderer.invoke("app:web-server"),
 	setWebServer: (enabled: boolean): Promise<unknown> => ipcRenderer.invoke("app:web-server-set", enabled),
+	mobile: (): Promise<unknown> => ipcRenderer.invoke("mobile:state"),
+	setMobileEnabled: (enabled: boolean): Promise<unknown> => ipcRenderer.invoke("mobile:set-enabled", enabled),
+	mobileNewCode: (): Promise<unknown> => ipcRenderer.invoke("mobile:new-code"),
+	mobileRemoveDevice: (deviceId: string): Promise<unknown> => ipcRenderer.invoke("mobile:remove-device", deviceId),
+	onMobileState: (cb: (state: unknown) => void): void => {
+		ipcRenderer.on("mobile:state", (_e, state) => cb(state));
+	},
 	ready: (): void => ipcRenderer.send("renderer:ready"),
 });

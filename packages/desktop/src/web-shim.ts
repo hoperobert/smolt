@@ -168,6 +168,11 @@ export const smoltWebApi = {
 	onViewOpen: sub("views:open"),
 	webServer: () => invoke("app:web-server"),
 	setWebServer: (enabled: boolean) => invoke("app:web-server-set", enabled),
+	mobile: () => invoke("mobile:state"),
+	setMobileEnabled: (enabled: boolean) => invoke("mobile:set-enabled", enabled),
+	mobileNewCode: () => invoke("mobile:new-code"),
+	mobileRemoveDevice: (deviceId: string) => invoke("mobile:remove-device", deviceId),
+	onMobileState: sub("mobile:state"),
 	ready: () => send("renderer:ready"),
 };
 

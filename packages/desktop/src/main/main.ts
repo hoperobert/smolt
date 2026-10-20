@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
 	app,
@@ -43,7 +43,9 @@ import {
 } from "./diff.ts";
 import { transformersEntry } from "./embeddings-module.ts";
 import { refreshIconCacheAfterUpdate } from "./icon-cache.ts";
+import { inProcessTransport, mirrorWindow, onWindowSend, tapIpc } from "./ipc-tap.ts";
 import { fetchLinkPreview } from "./link-preview.ts";
+import { MobileBridge } from "./mobile/bridge.ts";
 import { searchProjectFiles } from "./project-files.ts";
 import { DesktopSecretStore, type KeyCipher, migrateLegacyVosKey } from "./secret-store.ts";
 import { listSessions, searchSessions, sessionCwd } from "./sessions.ts";
@@ -53,11 +55,12 @@ import { makeCliRunner, suggestStarters } from "./starters.ts";
 import { collectStats } from "./stats.ts";
 import { checkNow, installUpdate, startUpdates, updateState } from "./updates.ts";
 import { VIEW_CSP, ViewHost } from "./views.ts";
-import { tapIpc, WebServer } from "./web-server.ts";
+import { WebServer } from "./web-server.ts";
 import { checkoutBranch, createWorktree, listBranches, listWorktrees, removeWorktree, repoRoot } from "./worktrees.ts";
 
-// Before any handler registers: the web server answers browsers with the
-// same handlers the window gets, and this is how it learns them.
+// Before any handler registers: the web server answers browsers, and the
+// iPhone bridge the phone, with the same handlers the window gets, and this
+// is how they learn them.
 tapIpc();
 
 // Extension views load from smolt-view://<id>/ into sandboxed frames; the
@@ -294,6 +297,10 @@ const agentEnv = (extra: Record<string, string>): Record<string, string | undefi
 let telegramBridge: AgentBridge | null = null;
 /** The extension view host's agent (views.ts), for shutdown. */
 let viewHostBridge: AgentBridge | null = null;
+/** The iPhone bridge (mobile/bridge.ts), for shutdown. */
+let mobileBridge: MobileBridge | null = null;
+/** What the phone calls this computer's operating system. */
+const OS_NAMES: Partial<Record<NodeJS.Platform, string>> = { win32: "Windows", darwin: "macOS", linux: "Linux" };
 let telegramSync: Promise<void> = Promise.resolve();
 
 function telegramConfigPath(): string {
@@ -927,7 +934,8 @@ app.whenReady().then(async () => {
 		dataDir: join(app.getPath("userData"), "web-server"),
 		settingsPath: join(app.getPath("userData"), "web-server.json"),
 	});
-	webServer.mirror(win);
+	mirrorWindow(win);
+	onWindowSend((channel, args) => webServer.broadcast(channel, args));
 	ipcMain.handle("app:web-server", () => webServer.state());
 	ipcMain.handle("app:web-server-set", async (_event, enabled: unknown) => {
 		try {
@@ -942,6 +950,29 @@ app.whenReady().then(async () => {
 			console.error(`web server: ${error instanceof Error ? error.message : String(error)}`);
 		});
 	}
+
+	// Smolt for iPhone, served from this process: off until switched on in
+	// Settings › iPhone. The phone drives this app through the same handlers
+	// the window uses (ipc-tap.ts), so it sees the chat on screen.
+	const mobile = new MobileBridge({
+		dataDir: join(app.getPath("userData"), "mobile"),
+		transport: inProcessTransport(),
+		computerName: hostname().replace(/\.local$/, ""),
+		osName: `${OS_NAMES[process.platform] ?? process.platform} ${process.getSystemVersion()}`,
+		// Plain ws:// for debug builds of the phone app; never in a packaged build.
+		insecure: !app.isPackaged && process.env.SMOLT_MOBILE_INSECURE === "1",
+		// The current pairing link in userData/mobile/pair-link.txt, for the iOS Simulator.
+		writeLinkFile: !app.isPackaged,
+		log: (line) => console.log(`[mobile] ${line}`),
+		onState: (state) => {
+			if (!win.isDestroyed()) win.webContents.send("mobile:state", state);
+		},
+	});
+	mobileBridge = mobile;
+	ipcMain.handle("mobile:state", () => mobile.state());
+	ipcMain.handle("mobile:set-enabled", (_event, enabled: unknown) => mobile.setEnabled(enabled === true));
+	ipcMain.handle("mobile:new-code", () => mobile.newCode());
+	ipcMain.handle("mobile:remove-device", (_event, deviceId: unknown) => mobile.removeDevice(String(deviceId ?? "")));
 
 	/**
 	 * An extension's notification. With `native`, an OS notification too, so
@@ -2714,6 +2745,8 @@ app.whenReady().then(async () => {
 	announceActive();
 	await rebaseline();
 	if (!win.isDestroyed()) win.webContents.send("agent:started", bridge.status);
+	// Every handler is registered and the agent is up: the phone can be let in.
+	if (mobile.settings().enabled) void mobile.start();
 	// The Telegram host follows the linked config: setup done in any pane is
 	// picked up within a poll interval, unlinking shuts the host down.
 	syncTelegramHost();
@@ -2729,5 +2762,6 @@ app.on("window-all-closed", () => {
 		sideBridge?.stop(),
 		telegramBridge?.stop(),
 		viewHostBridge?.stop(),
+		mobileBridge?.stop(),
 	]).finally(() => app.quit());
 });

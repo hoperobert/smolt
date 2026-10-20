@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type WebServerState } from "../lib/api.ts";
+import { api, type MobileState, type WebServerState } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
+import { relativeTime } from "../lib/format.ts";
 import {
 	afterWorktreeChange,
 	app,
@@ -45,6 +46,7 @@ const SECTIONS = [
 	{ id: "providers", label: "Providers", group: "Session", icon: "key" },
 	{ id: "model", label: "Model", group: "Session", icon: "model" },
 	{ id: "extensions", label: "Extensions", group: "App", icon: "extension" },
+	{ id: "iphone", label: "iPhone", group: "App", icon: "phone" },
 	{ id: "appearance", label: "Appearance", group: "App", icon: "appearance" },
 	{ id: "customise", label: "Customise", group: "App", icon: "cog" },
 	{ id: "about", label: "About", group: "App", icon: "info" },
@@ -271,6 +273,168 @@ function WebServerSection() {
 				}}
 			/>
 		</Row>
+	);
+}
+
+/** mobile:state pushes, fanned out to whichever section is showing (the preload's listeners never come off). */
+const mobileListeners = new Set<(state: MobileState) => void>();
+let mobileSubscribed = false;
+function useMobileState(): [MobileState | null, (state: MobileState) => void] {
+	const [mobile, setMobile] = useState<MobileState | null>(null);
+	useEffect(() => {
+		if (!mobileSubscribed) {
+			mobileSubscribed = true;
+			api.onMobileState((next) => {
+				for (const listener of mobileListeners) listener(next);
+			});
+		}
+		mobileListeners.add(setMobile);
+		api.mobile()
+			.then(setMobile)
+			.catch(() => setMobile(null));
+		return () => {
+			mobileListeners.delete(setMobile);
+		};
+	}, []);
+	return [mobile, setMobile];
+}
+
+function useNow(active: boolean): number {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!active) return;
+		const timer = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(timer);
+	}, [active]);
+	return now;
+}
+
+/**
+ * Smolt for iPhone. The switch starts and stops the server in the main
+ * process; while it runs, the QR code and the six digits pair a phone, and
+ * the paired phones are listed with a way to remove each.
+ */
+function MobileSection({ query }: { query: string }) {
+	const [mobile, setMobile] = useMobileState();
+	const [busy, setBusy] = useState(false);
+	const pairing = mobile?.running ? mobile.pairing : undefined;
+	const now = useNow(pairing !== undefined);
+	const left = pairing ? Math.max(0, Math.ceil((pairing.expiresAt - now) / 1000)) : 0;
+	const run = async (action: () => Promise<MobileState>): Promise<void> => {
+		setBusy(true);
+		try {
+			setMobile(await action());
+		} catch (error) {
+			toast(error instanceof Error ? error.message : String(error), "error");
+		} finally {
+			setBusy(false);
+		}
+	};
+	const idle = "Use this computer's chats from Smolt for iPhone, over your network or Tailscale.";
+	const hint = mobile?.error ?? (mobile?.running ? `Listening on port ${mobile.port}.` : idle);
+	const devices = mobile?.devices ?? [];
+	return (
+		<>
+			{matches(query, "iphone phone mobile connect pair") && (
+				<Row label="Connect iPhone" hint={hint}>
+					<Switch
+						checked={mobile?.enabled ?? false}
+						disabled={busy || mobile === null}
+						onCheckedChange={(next) => void run(() => api.setMobileEnabled(next))}
+					/>
+				</Row>
+			)}
+			{mobile?.running && matches(query, "iphone phone mobile pair qr code") && (
+				<Block label="Pair an iPhone" hint="Scan the code with Smolt for iPhone, or type the six digits. Each code works once.">
+					<div className="flex items-center gap-6">
+						<div
+							className={cn(
+								"flex size-[168px] flex-none items-center justify-center rounded-xl bg-white p-1.5",
+								!pairing && "opacity-25",
+							)}
+						>
+							{pairing && <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(pairing.qrSvg)}`} alt="Pairing QR code" className="size-full" />}
+						</div>
+						<div className="flex min-w-0 flex-col gap-2">
+							{pairing ? (
+								<>
+									<span className="font-mono text-2xl tracking-[0.2em] tabular-nums">
+										{pairing.code.slice(0, 3)} {pairing.code.slice(3)}
+									</span>
+									<span className="text-xs text-faint">
+										Expires in {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
+									</span>
+								</>
+							) : (
+								<span className="text-xs leading-relaxed text-faint">
+									{mobile.lockedOut ? "Locked after five wrong tries." : "No code right now."}
+								</span>
+							)}
+							<div className="flex flex-wrap gap-1.5 pt-1">
+								<Button variant="outline" size="sm" disabled={busy} onClick={() => void run(() => api.mobileNewCode())}>
+									New code
+								</Button>
+								{pairing && (
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={async () => {
+											const result = await api.copyText(pairing.link);
+											if (result.ok) toast("Pairing link copied");
+										}}
+									>
+										Copy link
+									</Button>
+								)}
+							</div>
+						</div>
+					</div>
+				</Block>
+			)}
+			{mobile?.running && matches(query, "iphone phone mobile address tailscale network") && (
+				<Row
+					label="Addresses"
+					hint={`${mobile.addresses
+						.map((address) => `${address.host}${address.kind === "tailscale" ? " (Tailscale)" : ""}`)
+						.join(", ")}, port ${mobile.port}${mobile.secure ? "" : " (unencrypted: development only)"}`}
+				/>
+			)}
+			{(mobile?.running || devices.length > 0) && matches(query, "iphone phone mobile paired devices remove") && (
+				<Block label="Paired iPhones" hint={devices.length === 0 ? "None yet." : "Removing one disconnects it; it has to pair again."}>
+					{devices.length > 0 && (
+						<div className="flex flex-col gap-0.5">
+							{devices.map((device) => (
+								<div key={device.id} className="flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 hover:bg-accent">
+									<div className="flex min-w-0 flex-col">
+										<span className="min-w-0 overflow-hidden text-sm text-ellipsis whitespace-nowrap">{device.name}</span>
+										<span className="text-xs text-faint">
+											{device.connected ? "Connected now" : `Last seen ${relativeTime(device.lastSeenAt)}`}
+											{device.model ? ` · ${device.model}` : ""}
+										</span>
+									</div>
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={busy}
+										onClick={async () => {
+											const sure = await requestConfirm({
+												title: `Remove ${device.name}?`,
+												message: "It is disconnected now, and has to scan a new code to connect again.",
+												actionLabel: "Remove",
+												destructive: true,
+											});
+											if (sure) await run(() => api.mobileRemoveDevice(device.id));
+										}}
+									>
+										Remove
+									</Button>
+								</div>
+							))}
+						</div>
+					)}
+				</Block>
+			)}
+		</>
 	);
 }
 
@@ -1036,6 +1200,7 @@ export function SettingsDialog() {
 								)}
 							</>
 						)}
+						{show("iphone") && <MobileSection query={query} />}
 						{show("appearance") && (
 							<>
 								{matches(query, "theme appearance light dark") && (

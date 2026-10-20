@@ -29,6 +29,7 @@ const PATHS: Record<string, string> = {
 	extension: `<rect ${STROKE} x="3.25" y="3.25" width="6" height="6" rx="1.75"/><rect ${STROKE} x="10.75" y="3.25" width="6" height="6" rx="1.75"/><rect ${STROKE} x="3.25" y="10.75" width="6" height="6" rx="1.75"/><rect ${STROKE} x="10.75" y="10.75" width="6" height="6" rx="1.75"/>`,
 	appearance: `<circle ${STROKE} cx="10" cy="10" r="3.75"/><path ${STROKE} d="M10 2.5v1.75M10 15.75v1.75M17.5 10h-1.75M4.25 10H2.5M15.3 4.7l-1.25 1.25M5.95 14.05 4.7 15.3M15.3 15.3l-1.25-1.25M5.95 5.95 4.7 4.7"/>`,
 	key: `<circle ${STROKE} cx="7" cy="12.5" r="3.25"/><path ${STROKE} d="m9.4 10.1 6.6-6.6M13.5 6l2 2M11.5 8l2 2"/>`,
+	phone: `<rect ${STROKE} x="5.75" y="2.75" width="8.5" height="14.5" rx="2"/><path ${STROKE} d="M9 14.5h2"/>`,
 	info: `<circle ${STROKE} cx="10" cy="10" r="6.75"/><path ${STROKE} d="M10 9.25v4.25"/><circle cx="10" cy="6.6" r="0.95" fill="currentColor"/>`,
 	close: `<path ${STROKE} d="m5.5 5.5 9 9M14.5 5.5l-9 9"/>`,
 	copy: `<rect ${STROKE} x="7" y="7" width="8.5" height="8.5" rx="2"/><path ${STROKE} d="M12.5 4.5h-8a1 1 0 0 0-1 1v8"/>`,

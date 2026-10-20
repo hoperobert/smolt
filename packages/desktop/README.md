@@ -56,7 +56,7 @@ through the same reducer the UI uses.
 
 Settings › General › "Local web server" serves the app in a browser from the running desktop process: the same agent, the same chats, one more window on them. It listens on `http://localhost:7332` and, when the machine has one, its Tailscale address, with HTTPS beside it on 7333 (a self-signed certificate made by openssl on first use; the browser warns once) — dictation needs the HTTPS one, because the microphone only exists in a secure context. The setting lives in `web-server.json` in the app's user-data folder (`{ "enabled": true, "port": 7332, "lan": false }`); `lan: true` binds every interface. There is no login: whoever can reach the port drives the agent.
 
-The browser gets `window.smolt` from `src/web-shim.ts`, the preload's API over `POST /invoke` and an SSE stream at `/events`; a test keeps the two in step. `src/main/web-server.ts` records every `ipcMain.handle` and mirrors every `webContents.send`, so a browser client sees exactly what the window sees. Every window shows the same chat: a message sent from one streams into all of them through the mirrored agent events, and a chat opened in one is followed by the others (`session:changed`, announced by the main process after every move; a window not already there loads the chat the way it loads any other).
+The browser gets `window.smolt` from `src/web-shim.ts`, the preload's API over `POST /invoke` and an SSE stream at `/events`. `src/main/ipc-tap.ts` records every `ipcMain.handle` and mirrors every `webContents.send`, so a browser client sees exactly what the window sees. Every window shows the same chat: a message sent from one streams into all of them through the mirrored agent events, and a chat opened in one is followed by the others (`session:changed`, announced by the main process after every move; a window not already there loads the chat the way it loads any other).
 
 ## Extension views
 
@@ -65,3 +65,19 @@ Extensions can contribute pages to the app (`smolt.registerView`, see the coding
 Extension secrets (`smolt.secrets`) are kept here too: every agent runs with `SMOLT_RPC_HOST_SECRETS=1` and asks this process, which seals values with Electron safeStorage in `desktop-secrets.json` in the agent directory (`src/main/secret-store.ts`). `ctx.ui.notify(message, type, { native: true })` from any agent shows an OS notification.
 
 Vos (the user's AI teammates) is such an extension: `packages/coding-agent/src/extensions/vos/`, with its view built from `view/`. Nothing about it lives in this package beyond a one-time move of the key the old built-in section kept in `~/.smolt/vos.json` into the extension's secrets.
+
+## iPhone
+
+Settings › iPhone › "Connect iPhone" serves Smolt for iPhone (the Smolt Mobile Protocol: JSON-RPC over a WebSocket) from this process. It is off by default; while on, it listens on every interface at port 7350 over WSS with a self-signed P-256 certificate whose public-key hash (`fp`) the phone pins, and advertises `_smolt._tcp` over Bonjour. Turning it off closes both.
+
+Pairing: the section shows a QR code of `smolt://pair?v=1&n=<computer name>&h=<host>[,<host>…]&p=7350&fp=<fp>&c=<6 digits>` and the six digits under it. A code lasts five minutes and works once; five wrong tries lock pairing until New code is pressed. The phone keeps a P-256 key and proves itself on every connection (`auth.challenge` / `auth.verify`, ECDSA over a one-use nonce). Remove sends `device.revoked` and closes the phone's socket.
+
+The bridge lives in `src/main/mobile/` and imports no Electron: `server.ts` and `methods.ts` are the protocol, `desktop-source.ts` maps it onto the desktop's own IPC channels (the same ones the window uses), and `transport.ts` is the seam. The app hands it `inProcessTransport()` from `ipc-tap.ts`, which calls the recorded handlers directly and fans out what the window is sent; `test/mobile-bridge.test.ts` drives it through a fake handler map instead.
+
+Its data lives in `mobile/` in the app's user-data folder: `mobile.json` (`{ "enabled": true, "port": 7350 }`), `smolt-mobile.json` (paired devices, files the phone uploaded), `smolt-desktop.json` (stars and message ids), and the certificate. A development build also keeps the current pairing link in `mobile/pair-link.txt`, for the iOS Simulator:
+
+```bash
+xcrun simctl openurl booted "$(cat ~/Library/Application\ Support/@smolt/desktop/mobile/pair-link.txt)"
+```
+
+`SMOLT_MOBILE_INSECURE=1` (development builds only) serves plain `ws://` with no `fp` in the link, which only debug builds of the phone app accept.

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Settings › iPhone serves Smolt for iPhone from the desktop itself: no separate bridge process and no need for the local web server. Off by default; when switched on it listens on port 7350 (WSS with a pinned self-signed P-256 certificate) and advertises `_smolt._tcp` over Bonjour. The section shows the pairing QR code, the six-digit code with its countdown, New code and Copy link, the addresses (LAN and Tailscale), and the paired iPhones with when each was last seen and a Remove button. Codes last five minutes and work once; five wrong tries lock pairing until New code is pressed. The phone sees the same chats, models, approvals and extension questions as the window, through the same IPC handlers, in-process.
 - If llama.cpp is set up and a llama-server binary plus GGUF models are found on the machine, settings get a Launch server button that starts the router and refreshes the model list.
 
 ### Fixed

@@ -5,7 +5,7 @@ import http from "node:http";
 import https from "node:https";
 import { networkInterfaces } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
-import { type BrowserWindow, ipcMain } from "electron";
+import { invokeHandler, sendListenersOf } from "./ipc-tap.ts";
 import { VIEW_CSP } from "./views.ts";
 
 /**
@@ -52,37 +52,6 @@ export interface WebServerState {
 }
 
 export const DEFAULT_WEB_PORT = 7332;
-
-// ---------------------------------------------------------------- ipc tap
-
-type InvokeHandler = (event: unknown, ...args: unknown[]) => unknown;
-type SendListener = (event: unknown, ...args: unknown[]) => void;
-
-const invokeHandlers = new Map<string, InvokeHandler>();
-const sendListeners = new Map<string, SendListener[]>();
-let tapped = false;
-
-/**
- * Record every IPC handler the main process registers, so a browser client
- * can call the same functions the window does. Must run before any
- * `ipcMain.handle` — main.ts calls it at import time.
- */
-export function tapIpc(): void {
-	if (tapped) return;
-	tapped = true;
-	const handle = ipcMain.handle.bind(ipcMain);
-	ipcMain.handle = ((channel: string, listener: InvokeHandler) => {
-		invokeHandlers.set(channel, listener);
-		return handle(channel, listener as never);
-	}) as typeof ipcMain.handle;
-	const on = ipcMain.on.bind(ipcMain);
-	ipcMain.on = ((channel: string, listener: SendListener) => {
-		const list = sendListeners.get(channel) ?? [];
-		list.push(listener);
-		sendListeners.set(channel, list);
-		return on(channel, listener as never);
-	}) as typeof ipcMain.on;
-}
 
 // ---------------------------------------------------------------- settings
 
@@ -365,19 +334,7 @@ export class WebServer {
 		return this.state();
 	}
 
-	/**
-	 * Everything the window is sent, the browsers are sent too. The wrap is
-	 * on the instance, so every `win.webContents.send` in main.ts feeds it.
-	 */
-	mirror(win: BrowserWindow): void {
-		const contents = win.webContents;
-		const send = contents.send.bind(contents);
-		contents.send = ((channel: string, ...args: unknown[]) => {
-			send(channel, ...args);
-			this.broadcast(channel, args);
-		}) as typeof contents.send;
-	}
-
+	/** Everything the window is sent, the browsers are sent too (main.ts wires it through ipc-tap.ts). */
 	broadcast(channel: string, args: unknown[]): void {
 		if (this.clients.size === 0) return;
 		let data: string;
@@ -545,7 +502,7 @@ export class WebServer {
 						const buf = Buffer.from(String(args[0] ?? ""), "base64");
 						args = [buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)];
 					}
-					const handle = invokeHandlers.get(channel);
+					const handle = invokeHandler(channel);
 					if (!handle) {
 						res.writeHead(404, { "content-type": "application/json" });
 						res.end(JSON.stringify({ error: `no handler: ${channel}` }));
@@ -562,7 +519,7 @@ export class WebServer {
 				} else if (req.method === "POST" && url === "/send") {
 					const body = JSON.parse(await readBody(req)) as { channel?: string; args?: unknown[] };
 					const args = Array.isArray(body.args) ? body.args : [];
-					for (const listener of sendListeners.get(String(body.channel ?? "")) ?? []) listener({}, ...args);
+					for (const listener of sendListenersOf(String(body.channel ?? ""))) listener({}, ...args);
 					res.writeHead(204);
 					res.end();
 				} else if (req.method === "GET") {

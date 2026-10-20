@@ -155,6 +155,14 @@ export interface SmoltApi {
 	/** The in-app web server: whether it is on, and where to open it. */
 	webServer(): Promise<WebServerState>;
 	setWebServer(enabled: boolean): Promise<WebServerState>;
+	/** Smolt for iPhone, served by this app: the switch, the pairing code, the paired iPhones. */
+	mobile(): Promise<MobileState>;
+	setMobileEnabled(enabled: boolean): Promise<MobileState>;
+	/** A fresh pairing code (also after five wrong tries locked the old one). */
+	mobileNewCode(): Promise<MobileState>;
+	/** Forget an iPhone; it is disconnected and must pair again. */
+	mobileRemoveDevice(deviceId: string): Promise<MobileState>;
+	onMobileState(cb: (state: MobileState) => void): void;
 	ready(): void;
 }
 
@@ -175,6 +183,19 @@ export interface WebServerState {
 	https: boolean;
 	/** Where to open it, best first. */
 	urls: string[];
+	error?: string;
+}
+
+/** main/mobile/bridge.ts MobileState: what Settings › iPhone shows. */
+export interface MobileState {
+	enabled: boolean;
+	running: boolean;
+	port: number;
+	secure: boolean;
+	addresses: { host: string; kind: "lan" | "tailscale" | "local" }[];
+	pairing?: { code: string; expiresAt: number; link: string; qrSvg: string };
+	lockedOut: boolean;
+	devices: { id: string; name: string; model: string; pairedAt: number; lastSeenAt: number; connected: boolean }[];
 	error?: string;
 }
 
